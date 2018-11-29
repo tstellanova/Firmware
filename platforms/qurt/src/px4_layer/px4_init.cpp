@@ -37,12 +37,15 @@
 #include <px4_defines.h>
 #include <drivers/drv_hrt.h>
 #include <lib/parameters/param.h>
+#include <px4_work_queue/wq_start.h>
 
 int px4_platform_init(void)
 {
 	hrt_init();
 
 	param_init();
+
+	wq_manager_start();
 
 	return PX4_OK;
 }

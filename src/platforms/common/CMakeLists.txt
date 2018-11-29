@@ -39,6 +39,9 @@ if (NOT "${PX4_PLATFORM}" MATCHES "qurt" AND NOT "${PX4_BOARD}" MATCHES "io-v2")
 		)
 endif()
 
+add_subdirectory(px4_work_queue)
+add_subdirectory(work_queue)
+
 px4_add_library(px4_platform
 	module.cpp
 	px4_getopt.c
@@ -46,5 +49,3 @@ px4_add_library(px4_platform
 	shutdown.cpp
 	${SRCS}
 	)
-
-add_subdirectory(work_queue)
