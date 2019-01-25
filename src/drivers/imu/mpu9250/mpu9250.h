@@ -408,6 +408,8 @@ protected:
 	void Run() override;
 
 private:
+	struct hrt_call		_call {};
+
 	MPU9250_accel   *_accel;
 	MPU9250_gyro	*_gyro;
 	MPU9250_mag     *_mag;
@@ -516,6 +518,8 @@ private:
 	 * Fetch measurements from the sensor and update the report buffers.
 	 */
 	void			measure();
+
+	static void measure_trampoline(void *arg);
 
 	/**
 	 * Select a register bank in ICM20948

@@ -1042,13 +1042,33 @@ MPU9250::start()
 
 	_mag->_mag_reports->flush();
 
-	ScheduleOnInterval(_call_interval - MPU9250_TIMER_REDUCTION, 10000);
+	// If 6500 use WQ
+	if (_whoami == MPU_WHOAMI_6500) {
+		ScheduleOnInterval(_call_interval - MPU9250_TIMER_REDUCTION, 10000);
+
+	} else {
+
+		hrt_call_every(&_call,
+			       1000,
+			       _call_interval - MPU9250_TIMER_REDUCTION,
+			       (hrt_callout)&MPU9250::measure_trampoline, this);
+	}
+
 }
 
 void
 MPU9250::stop()
 {
 	ScheduleClear();
+}
+
+void
+MPU9250::measure_trampoline(void *arg)
+{
+	MPU9250 *dev = reinterpret_cast<MPU9250 *>(arg);
+
+	/* make another measurement */
+	dev->measure();
 }
 
 void
