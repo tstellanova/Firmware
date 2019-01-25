@@ -57,24 +57,23 @@
 namespace device
 {
 
+// static member bitmask
+uint8_t SPI::_is_locked = 0;
+
 SPI::SPI(const char *name,
 	 const char *devname,
 	 int bus,
 	 uint32_t device,
 	 enum spi_mode_e mode,
 	 uint32_t frequency) :
-	// base class
 	CDev(name, devname),
-	// public
-	// protected
-	locking_mode(LOCK_PREEMPTION),
-	// private
+	_locking_mode(LOCK_PREEMPTION),
 	_device(device),
 	_mode(mode),
 	_frequency(frequency),
-	_dev(nullptr)
+	_dev(nullptr),
+	_isr_deferred(perf_alloc(PC_COUNT, "spi_isr_deferred"))
 {
-	// fill in _device_id fields for a SPI device
 	_device_id.devid_s.bus_type = DeviceBusType_SPI;
 	_device_id.devid_s.bus = bus;
 	_device_id.devid_s.address = (uint8_t)device;
@@ -84,14 +83,12 @@ SPI::SPI(const char *name,
 
 SPI::~SPI()
 {
-	// XXX no way to let go of the bus...
+	perf_free(_isr_deferred);
 }
 
 int
 SPI::init()
 {
-	int ret = OK;
-
 	/* attach to the spi bus */
 	if (_dev == nullptr) {
 		_dev = px4_spibus_initialize(get_device_bus());
@@ -99,72 +96,86 @@ SPI::init()
 
 	if (_dev == nullptr) {
 		DEVICE_DEBUG("failed to init SPI");
-		ret = -ENOENT;
-		goto out;
+		return PX4_ERROR;
 	}
 
 	/* deselect device to ensure high to low transition of pin select */
 	SPI_SELECT(_dev, _device, false);
 
 	/* call the probe function to check whether the device is present */
-	ret = probe();
-
-	if (ret != OK) {
+	if (probe() != PX4_OK) {
 		DEVICE_DEBUG("probe failed");
-		goto out;
+		return PX4_ERROR;
 	}
 
 	/* do base class init, which will create the device node, etc. */
-	ret = CDev::init();
-
-	if (ret != OK) {
+	if (CDev::init() != PX4_OK) {
 		DEVICE_DEBUG("cdev init failed");
-		goto out;
+		return PX4_ERROR;
 	}
 
 	/* tell the workd where we are */
 	DEVICE_LOG("on SPI bus %d at %d (%u KHz)", get_device_bus(), PX4_SPI_DEV_ID(_device), _frequency / 1000);
 
-out:
-	return ret;
+	return PX4_OK;
+}
+
+void SPI::lock(struct spi_dev_s *dev)
+{
+	_is_locked |= 1 << (_device_id.devid_s.bus - 1);
+	SPI_LOCK(dev, true);
+}
+
+void SPI::unlock(struct spi_dev_s *dev)
+{
+	SPI_LOCK(dev, false);
+	_is_locked &= ~(1 << (_device_id.devid_s.bus - 1));
 }
 
 int
 SPI::transfer(uint8_t *send, uint8_t *recv, unsigned len)
 {
-	int result;
-
 	if ((send == nullptr) && (recv == nullptr)) {
-		return -EINVAL;
+		return PX4_ERROR;
 	}
 
-	LockMode mode = up_interrupt_context() ? LOCK_NONE : locking_mode;
+	// LOCK_NONE if we are in interrupt context because we cannot wait on a semaphore.
+	LockMode mode = up_interrupt_context() ? LOCK_NONE : _locking_mode;
 
-	/* lock the bus as required */
 	switch (mode) {
-	default:
 	case LOCK_PREEMPTION: {
 			irqstate_t state = px4_enter_critical_section();
-			result = _transfer(send, recv, len);
+			_transfer(send, recv, len);
 			px4_leave_critical_section(state);
+			break;
 		}
-		break;
 
-	case LOCK_THREADS:
-		SPI_LOCK(_dev, true);
-		result = _transfer(send, recv, len);
-		SPI_LOCK(_dev, false);
-		break;
+	case LOCK_THREADS: {
+			lock(_dev);
+			_transfer(send, recv, len);
+			unlock(_dev);
+			break;
+		}
 
-	case LOCK_NONE:
-		result = _transfer(send, recv, len);
+	case LOCK_NONE: {
+			if (_is_locked) {
+				// Someone is using the bus
+				perf_count(_isr_deferred);
+				return PX4_ERROR;
+			}
+
+			_transfer(send, recv, len);
+			break;
+		}
+
+	default:
 		break;
 	}
 
-	return result;
+	return PX4_OK;
 }
 
-int
+void
 SPI::_transfer(uint8_t *send, uint8_t *recv, unsigned len)
 {
 	SPI_SETFREQUENCY(_dev, _frequency);
@@ -177,46 +188,51 @@ SPI::_transfer(uint8_t *send, uint8_t *recv, unsigned len)
 
 	/* and clean up */
 	SPI_SELECT(_dev, _device, false);
-
-	return OK;
 }
 
 int
 SPI::transferhword(uint16_t *send, uint16_t *recv, unsigned len)
 {
-	int result;
-
 	if ((send == nullptr) && (recv == nullptr)) {
 		return -EINVAL;
 	}
 
-	LockMode mode = up_interrupt_context() ? LOCK_NONE : locking_mode;
+	LockMode mode = up_interrupt_context() ? LOCK_NONE : _locking_mode;
 
-	/* lock the bus as required */
 	switch (mode) {
-	default:
 	case LOCK_PREEMPTION: {
 			irqstate_t state = px4_enter_critical_section();
-			result = _transferhword(send, recv, len);
+			_transferhword(send, recv, len);
 			px4_leave_critical_section(state);
+			break;
 		}
-		break;
 
-	case LOCK_THREADS:
-		SPI_LOCK(_dev, true);
-		result = _transferhword(send, recv, len);
-		SPI_LOCK(_dev, false);
-		break;
+	case LOCK_THREADS: {
+			lock(_dev);
+			_transferhword(send, recv, len);
+			unlock(_dev);
+			break;
+		}
 
-	case LOCK_NONE:
-		result = _transferhword(send, recv, len);
+	case LOCK_NONE: {
+			if (_is_locked) {
+				// Someone is using the bus
+				perf_count(_isr_deferred);
+				return PX4_ERROR;
+			}
+
+			_transferhword(send, recv, len);
+			break;
+		}
+
+	default:
 		break;
 	}
 
-	return result;
+	return PX4_OK;
 }
 
-int
+void
 SPI::_transferhword(uint16_t *send, uint16_t *recv, unsigned len)
 {
 	SPI_SETFREQUENCY(_dev, _frequency);
@@ -229,8 +245,6 @@ SPI::_transferhword(uint16_t *send, uint16_t *recv, unsigned len)
 
 	/* and clean up */
 	SPI_SELECT(_dev, _device, false);
-
-	return OK;
 }
 
 } // namespace device
