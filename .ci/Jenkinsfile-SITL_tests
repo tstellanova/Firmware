@@ -218,7 +218,7 @@ def createTestNode(Map test_def) {
   return {
     node {
       cleanWs()
-      docker.image("px4io/px4-dev-ros-kinetic:2019-01-31").inside('-e HOME=${WORKSPACE} --cap-add SYS_PTRACE --entrypoint=""') {
+      docker.image("px4io/px4-dev-ros-kinetic:2019-01-31").inside('-e HOME=${WORKSPACE} --cap-add SYS_PTRACE -e DISPLAY=":99"') {
         stage(test_def.name) {
           def run_script = test_def.get('run_script', 'rostest_px4_run.sh')
           def test_ok = true
