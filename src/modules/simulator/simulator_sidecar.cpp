@@ -18,11 +18,14 @@
 #include <pthread.h>
 #include <conversion/rotation.h>
 #include <mathlib/mathlib.h>
+#include <stdlib.h>
 
 #include <uORB/uORB.h>
 #include <uORB/uORBTopics.h>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/sensor_combined.h>
+
 
 
 #include <limits>
@@ -200,12 +203,21 @@ void Simulator::init_connection() {
 }
 
 
+float range_random(float min, float max)
+{
+  float s = rand() / (float)RAND_MAX;
+  return (min + s * (max - min));
+}
 
 void Simulator::recv_loop() {
 
   //TODO temporary, for loopback testing:
-  prep_receive_topic(ORB_ID(actuator_outputs),0);
-  prep_receive_topic(ORB_ID(vehicle_status),1);
+  for (unsigned i = 0; i < (sizeof(_actuator_outputs_sub) / sizeof(_actuator_outputs_sub[0])); i++) {
+    prep_receive_topic(ORB_ID(actuator_outputs),i);
+  }
+  prep_receive_topic(ORB_ID(vehicle_status),0);
+  prep_receive_topic(ORB_ID(sensor_combined),0);
+
 
   init_connection();
 
@@ -215,11 +227,54 @@ void Simulator::recv_loop() {
   fds[0].fd = _dest_sock_fd;
   fds[0].events = POLLIN;
 
+  orb_advert_t sensor_combined_advert = nullptr;
+  orb_advert_t sensor_gyro_advert = nullptr;
+
   while (true) {
     // wait for new messages to arrive
     int pret = ::poll(&fds[0], fd_count, 1000);
     if (pret == 0) {
       // Timed out.
+      //TODO temporary: force publish some attitude values
+
+      {
+        sensor_gyro_s gyro = {};
+
+        gyro.timestamp = hrt_absolute_time();
+        gyro.device_id = 2293768;
+
+        gyro.x = range_random(-1.0, 1.0);
+        gyro.y = range_random(-1.0, 1.0);
+        gyro.z = range_random(-1.0, 1.0);
+
+        gyro.x_raw = gyro.x  * 1000.0f;
+        gyro.y_raw = gyro.y * 1000.0f;
+        gyro.z_raw = gyro.z * 1000.0f;
+
+        gyro.temperature = range_random(0.0, 32.0);
+
+        int gyro_multi;
+        orb_publish_auto(ORB_ID(sensor_gyro), &sensor_gyro_advert, &gyro, &gyro_multi, ORB_PRIO_HIGH);
+      }
+
+      {
+        int instance_id = 0;
+        sensor_combined_s sensor = {};
+        sensor.timestamp = hrt_absolute_time();
+        sensor.gyro_rad[0] = range_random(0.0, 1.0);
+        sensor.gyro_rad[1] = range_random(0.0, 1.0);
+        sensor.gyro_rad[2] = range_random(0.0, 1.0);
+        sensor.accelerometer_m_s2[0] = range_random(0.0, 1.0);
+        sensor.accelerometer_m_s2[1] = range_random(0.0, 1.0);
+        sensor.accelerometer_m_s2[2] = range_random(0.0, 1.0);
+        sensor.accelerometer_integral_dt = 10; //usec
+        sensor.accelerometer_timestamp_relative = 0;
+        sensor.gyro_integral_dt = 10; //sampling period, usec
+
+
+        orb_publish_auto(ORB_ID(sensor_combined), &sensor_combined_advert,
+                                   (const void *) &sensor, &instance_id, ORB_PRIO_DEFAULT);
+      }
       continue;
     }
 
@@ -227,6 +282,7 @@ void Simulator::recv_loop() {
       PX4_WARN("poll error %d, %d", pret, errno);
       continue;
     }
+
 
     if (fds[0].revents & POLLIN) {
       int avail_len = recvfrom(_dest_sock_fd,  _recvbuf, sizeof(_recvbuf), 0,
