@@ -310,7 +310,7 @@ private:
 		_instance = NULL;
 	}
 
-	void initializeSensorData();
+//	void initializeSensorData();
 
 	static Simulator *_instance;
 
@@ -401,7 +401,7 @@ private:
 	void send_controls();
 	void send_heartbeat();
 	void request_hil_state_quaternion();
-	void pollForMAVLinkMessages(bool publish);
+//	void pollForMAVLinkMessages(bool publish);
 
 	void pack_actuator_message(mavlink_hil_actuator_controls_t &actuator_msg, unsigned index);
 	void send_mavlink_message(const mavlink_message_t &aMsg);
@@ -410,5 +410,20 @@ private:
 	void parameters_update(bool force);
 	static void *sending_trampoline(void *);
 	void send();
+
+
+	void init();
+  void init_connection();
+
+  void start_sender();
+  void runloop();
+
+	void send_loop();
+	void recv_loop();
+
+
+    /// subscribe to uorb topic
+  bool add_topic(const char *name, unsigned interval);
+
 #endif
 };

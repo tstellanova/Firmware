@@ -159,20 +159,26 @@ int Simulator::start(int argc, char *argv[])
 			_instance->set_port(atoi(argv[4]));
 		}
 
+//		char cmd_char = argv[2][1];
+//		PX4_WARN("char: %c", cmd_char);
+
 		if (argv[2][1] == 's') {
-			_instance->initializeSensorData();
+      _instance->init();
+      _instance->runloop();
+//			_instance->initializeSensorData();
 #ifndef __PX4_QURT
 			// Update sensor data
-			_instance->pollForMAVLinkMessages(false);
+//			_instance->pollForMAVLinkMessages(false);
 #endif
 
 		} else if (argv[2][1] == 'p') {
 			// Update sensor data
-			_instance->pollForMAVLinkMessages(true);
+//			_instance->pollForMAVLinkMessages(true);
 
+			_instance->init();
+			_instance->runloop();
 		} else {
-			_instance->initializeSensorData();
-			_instance->_initialized = true;
+//			_instance->initializeSensorData();
 		}
 
 		return 0;

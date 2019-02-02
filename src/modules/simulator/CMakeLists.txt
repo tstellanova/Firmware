@@ -50,7 +50,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 set(SIMULATOR_SRCS simulator.cpp)
 if (NOT ${PX4_PLATFORM} STREQUAL "qurt")
 	list(APPEND SIMULATOR_SRCS
-		simulator_mavlink.cpp)
+		simulator_sidecar.cpp)
 endif()
 
 add_subdirectory(ledsim)
@@ -74,8 +74,8 @@ px4_add_module(
 	)
 target_include_directories(modules__simulator INTERFACE ${PX4_SOURCE_DIR}/mavlink/include/mavlink)
 
-add_subdirectory(accelsim)
-add_subdirectory(airspeedsim)
-add_subdirectory(barosim)
-add_subdirectory(gpssim)
-add_subdirectory(gyrosim)
+#add_subdirectory(accelsim)
+#add_subdirectory(airspeedsim)
+#add_subdirectory(barosim)
+#add_subdirectory(gpssim)
+#add_subdirectory(gyrosim)
