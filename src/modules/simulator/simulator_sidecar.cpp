@@ -24,8 +24,12 @@
 #include <uORB/uORBTopics.h>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/vehicle_status.h>
-#include <uORB/topics/sensor_combined.h>
+//#include <uORB/topics/sensor_combined.h>
 
+//#include <uORB/topics/trajectory_setpoint.h>
+#include <uORB/topics/vehicle_local_position_setpoint.h>
+#include <uORB/topics/system_power.h>
+#include <uORB/topics/battery_status.h>
 
 
 #include <limits>
@@ -43,31 +47,34 @@ static pthread_t _sender_thread;
 static std::map<uint16_t, orb_id_t> _uorb_hash_to_orb_id;
 static std::map<uint16_t, orb_advert_t> _uorb_hash_to_advert;
 
+static std::map<int, orb_id_t> _uorb_sub_to_orb_id;
+
 const int UORB_MSG_HEADER_LEN = 5;
 
 
 //forward declarations
-void send_one_uorb_msg(const struct orb_metadata *meta, int handle);
+void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadata *meta, uint8_t* src, size_t len, int handle, uint8_t instance_id);
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval);
-void prep_receive_topic(orb_id_t orb_msg_id, int instance_id);
+void prep_for_topic_transactions(orb_id_t orb_msg_id);
 
 
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id) {
-
   int namelen = strlen(orb_msg_id->o_name);
-  uint16_t hash_val = namelen;
-  // crc_calculate((const uint8_t*) &_sendbuf[4], payload_len);
+  uint16_t hash_val = crc_calculate((const uint8_t*) orb_msg_id->o_name, namelen);
   return  hash_val;
 }
 
-void prep_receive_topic(orb_id_t orb_msg_id, int instance_id) {
-
+/**
+ * Prepare to send or receive serialized uorb messages with the given ID
+ *
+ * @param orb_msg_id
+ */
+void prep_for_topic_transactions(orb_id_t orb_msg_id) {
   uint16_t hashval = hash_from_msg_id(orb_msg_id);
   // the map of encoded hashval to orb_id
   _uorb_hash_to_orb_id[hashval] = orb_msg_id;
-  _uorb_hash_to_advert[hashval] = nullptr; //create a map slot for the advert, but don't advertise yet
-
-
+  //create a map slot for the advert, but don't advertise yet (unless we want to publish)
+  _uorb_hash_to_advert[hashval] = nullptr;
 
 }
 
@@ -79,6 +86,10 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
     if (interval > 0) {
       orb_set_interval(handle, interval);
     }
+
+    _uorb_sub_to_orb_id[handle] = orb_msg_id;
+    //be prepared to send or receive these from remote partner
+    prep_for_topic_transactions(orb_msg_id);
   }
   else {
     PX4_ERR("orb_subscribe_multi %s failed (%i)", orb_msg_id->o_name, errno);
@@ -86,6 +97,7 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
 
   return handle;
 }
+
 
 void Simulator::init()
 {
@@ -99,8 +111,10 @@ void Simulator::init()
   }
   _vehicle_status_sub =  subscribe_to_multi_topic(ORB_ID(vehicle_status), 0, 0);
 
-  this->_initialized = true;
+  subscribe_to_multi_topic(ORB_ID(vehicle_local_position_setpoint), 0, 0);
+  subscribe_to_multi_topic(ORB_ID(trajectory_setpoint), 0, 0);
 
+  this->_initialized = true;
 }
 
 
@@ -209,14 +223,63 @@ float range_random(float min, float max)
   return (min + s * (max - min));
 }
 
+
+void send_fake_msgs(Simulator::InternetProtocol via) {
+  {
+    sensor_gyro_s gyro = {};
+
+    gyro.timestamp = hrt_absolute_time();
+    gyro.device_id = 2293768;
+
+    gyro.x = range_random(-1.0, 1.0);
+    gyro.y = range_random(-1.0, 1.0);
+    gyro.z = range_random(-1.0, 1.0);
+
+    gyro.x_raw = gyro.x  * 1000.0f;
+    gyro.y_raw = gyro.y * 1000.0f;
+    gyro.z_raw = gyro.z * 1000.0f;
+
+    gyro.temperature = range_random(0.0, 32.0);
+
+    send_one_uorb_msg(via, ORB_ID(sensor_gyro), (uint8_t*)&gyro, sizeof(gyro), 0, 0);
+  }
+
+  system_power_s system_power = {
+    .timestamp =  hrt_absolute_time(),
+    .voltage5v_v = 5.0,
+    .voltage3v3_v = 3.3,
+    .v3v3_valid = 1,
+    .usb_connected = 0,
+    .brick_valid = 1,
+    .usb_valid = 0,
+    .servo_valid = 1,
+    .periph_5v_oc = 0,
+    .hipower_5v_oc = 0
+  };
+  send_one_uorb_msg(via, ORB_ID(system_power), (uint8_t*)&system_power, sizeof(system_power), 0, 0);
+
+
+  battery_status_s batt_status =  {
+    .timestamp =  hrt_absolute_time(),
+    .voltage_v = 16.0,
+    .cell_count = 4,
+    .connected = true,
+    .system_source = true,
+  };
+  send_one_uorb_msg(via, ORB_ID(battery_status), (uint8_t*)&batt_status, sizeof(batt_status), 0, 0);
+
+}
+
 void Simulator::recv_loop() {
 
-  //TODO temporary, for loopback testing:
-  for (unsigned i = 0; i < (sizeof(_actuator_outputs_sub) / sizeof(_actuator_outputs_sub[0])); i++) {
-    prep_receive_topic(ORB_ID(actuator_outputs),i);
-  }
-  prep_receive_topic(ORB_ID(vehicle_status),0);
-  prep_receive_topic(ORB_ID(sensor_combined),0);
+  // these are values we expect to be sent from our remote partner
+  prep_for_topic_transactions(ORB_ID(sensor_gyro));
+  prep_for_topic_transactions(ORB_ID(sensor_accel));
+  prep_for_topic_transactions(ORB_ID(sensor_mag));
+  prep_for_topic_transactions(ORB_ID(sensor_baro));
+  prep_for_topic_transactions(ORB_ID(system_power));
+  prep_for_topic_transactions(ORB_ID(battery_status));
+
 
 
   init_connection();
@@ -227,9 +290,6 @@ void Simulator::recv_loop() {
   fds[0].fd = _dest_sock_fd;
   fds[0].events = POLLIN;
 
-  orb_advert_t sensor_combined_advert = nullptr;
-  orb_advert_t sensor_gyro_advert = nullptr;
-
   while (true) {
     // wait for new messages to arrive
     int pret = ::poll(&fds[0], fd_count, 1000);
@@ -237,44 +297,8 @@ void Simulator::recv_loop() {
       // Timed out.
       //TODO temporary: force publish some attitude values
 
-      {
-        sensor_gyro_s gyro = {};
+      send_fake_msgs(_ip);
 
-        gyro.timestamp = hrt_absolute_time();
-        gyro.device_id = 2293768;
-
-        gyro.x = range_random(-1.0, 1.0);
-        gyro.y = range_random(-1.0, 1.0);
-        gyro.z = range_random(-1.0, 1.0);
-
-        gyro.x_raw = gyro.x  * 1000.0f;
-        gyro.y_raw = gyro.y * 1000.0f;
-        gyro.z_raw = gyro.z * 1000.0f;
-
-        gyro.temperature = range_random(0.0, 32.0);
-
-        int gyro_multi;
-        orb_publish_auto(ORB_ID(sensor_gyro), &sensor_gyro_advert, &gyro, &gyro_multi, ORB_PRIO_HIGH);
-      }
-
-      {
-        int instance_id = 0;
-        sensor_combined_s sensor = {};
-        sensor.timestamp = hrt_absolute_time();
-        sensor.gyro_rad[0] = range_random(0.0, 1.0);
-        sensor.gyro_rad[1] = range_random(0.0, 1.0);
-        sensor.gyro_rad[2] = range_random(0.0, 1.0);
-        sensor.accelerometer_m_s2[0] = range_random(0.0, 1.0);
-        sensor.accelerometer_m_s2[1] = range_random(0.0, 1.0);
-        sensor.accelerometer_m_s2[2] = range_random(0.0, 1.0);
-        sensor.accelerometer_integral_dt = 10; //usec
-        sensor.accelerometer_timestamp_relative = 0;
-        sensor.gyro_integral_dt = 10; //sampling period, usec
-
-
-        orb_publish_auto(ORB_ID(sensor_combined), &sensor_combined_advert,
-                                   (const void *) &sensor, &instance_id, ORB_PRIO_DEFAULT);
-      }
       continue;
     }
 
@@ -282,7 +306,6 @@ void Simulator::recv_loop() {
       PX4_WARN("poll error %d, %d", pret, errno);
       continue;
     }
-
 
     if (fds[0].revents & POLLIN) {
       int avail_len = recvfrom(_dest_sock_fd,  _recvbuf, sizeof(_recvbuf), 0,
@@ -299,19 +322,27 @@ void Simulator::recv_loop() {
         // o_size uint16_t
         // payload
 
-        PX4_WARN("recvd 0x%x %d %d", hashval, instance_id, payload_len);
-
+//        PX4_INFO("rcvd 0x%x %d %d", hashval, instance_id, payload_len);
         orb_id_t orb_msg_id = _uorb_hash_to_orb_id[hashval];
         orb_advert_t handle = _uorb_hash_to_advert[hashval];
 
-        int ret = orb_publish_auto(orb_msg_id, &handle, (const void *) &offset_buf[5], &instance_id, ORB_PRIO_DEFAULT);
-        if (OK != ret) {
-          PX4_ERR("publish err: %d",ret);
+        if (nullptr == orb_msg_id) {
+          PX4_INFO("hash 0x%x msg_id %p handle %p", hashval, orb_msg_id, handle);
+          offset_buf += 1;
+          avail_len -= 1;
+          continue;
         }
-        else {
-          PX4_INFO("published: %s [%d]", orb_msg_id->o_name, instance_id);
-          //TODO better way to update the handle?
-          _uorb_hash_to_advert[hashval] = handle;
+
+        if (ORB_ID(actuator_outputs) != orb_msg_id) {
+          int ret = orb_publish_auto(orb_msg_id, &handle, (const void *) &offset_buf[5], &instance_id,
+                                     ORB_PRIO_DEFAULT);
+          if (OK != ret) {
+            PX4_ERR("publish err: %d", ret);
+          } else {
+            PX4_DEBUG("published: %s [%d]", orb_msg_id->o_name, instance_id);
+            //TODO better way to update the handle?
+            _uorb_hash_to_advert[hashval] = handle;
+          }
         }
 
         offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
@@ -346,7 +377,7 @@ void Simulator::send_loop()
     system_sleep(5);
   }
 
-  PX4_WARN("Simulator::send_loop");
+  PX4_WARN("start Simulator::send_loop");
 
   px4_pollfd_struct_t fds[1] = {};
   fds[0].fd = _actuator_outputs_sub[0];
@@ -355,7 +386,6 @@ void Simulator::send_loop()
   while (true) {
     // Wait for up to 100ms for data.
     int pret = px4_poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), 100);
-
     if (pret == 0) {
       // Timed out, try again.
       continue;
@@ -367,25 +397,31 @@ void Simulator::send_loop()
     }
 
     if (fds[0].revents & POLLIN) {
-      PX4_WARN("new data 0x%x", fds[0].fd);
-      // Got new data to read, update all topics.
+      // Our sentinel topic updated: check all subscribed topics
       poll_topics();
     }
   }
 }
 
 
-void send_one_uorb_msg(Simulator::InternetProtocol via, orb_id_t orb_msg_id, int handle, uint8_t instance_id) {
-  //only bother processing uorb messages if we have a connected listener
+void send_one_uorb_msg(Simulator::InternetProtocol via, orb_id_t orb_msg_id,
+    uint8_t* src, size_t len,
+    int handle, uint8_t instance_id) {
+  //only bother processing uorb messages if we have a connected partner
   if (_dest_sock_fd > 0) {
-    orb_copy(orb_msg_id, handle, (void*)&_sendbuf[4]);
+    if (nullptr == src) {
+      orb_copy(orb_msg_id, handle, (void *) &_sendbuf[4]);
+    }
+    else {
+      memcpy((void *) &_sendbuf[4], src, len);
+    }
 
     uint16_t payload_len = orb_msg_id->o_size;
     uint16_t msg_len = UORB_MSG_HEADER_LEN + payload_len;
-    uint16_t hash_val = hash_from_msg_id(orb_msg_id);
+    uint16_t hash_val = hash_from_msg_id(orb_msg_id); //TODO store these in reverse id-to-hash map
 
 
-    PX4_WARN("encode %s[%d] (0x%x %d)", orb_msg_id->o_name, instance_id, hash_val, payload_len);
+//    PX4_WARN("encode %s[%d] (0x%x %d)", orb_msg_id->o_name, instance_id, hash_val, payload_len);
     // uorb wrapper header
     _sendbuf[0] = (hash_val >> 8) & 0xFF;
     _sendbuf[1] = hash_val & 0xFF;
@@ -408,7 +444,7 @@ void send_one_uorb_msg(Simulator::InternetProtocol via, orb_id_t orb_msg_id, int
     }
 
     if (sent_len > 0) {
-      PX4_WARN("sent 0x%x %d",hash_val,(int)sent_len);
+      PX4_DEBUG("sent %s 0x%x %d %d",orb_msg_id->o_name, hash_val, instance_id, payload_len);
     }
   }
 
@@ -416,24 +452,18 @@ void send_one_uorb_msg(Simulator::InternetProtocol via, orb_id_t orb_msg_id, int
 
 void Simulator::poll_topics()
 {
-  // copy new actuator data if available
-  bool updated;
+  //check all subscribed topics for updates
+  std::map<int, orb_id_t>::iterator it;
 
-  for (unsigned i = 0; i < (sizeof(_actuator_outputs_sub) / sizeof(_actuator_outputs_sub[0])); i++) {
-    orb_check(_actuator_outputs_sub[i], &updated);
-
+  for ( it = _uorb_sub_to_orb_id.begin(); it != _uorb_sub_to_orb_id.end(); it++ ) {
+    bool updated = false;
+    orb_check(it->first, &updated);
     if (updated) {
-      send_one_uorb_msg(_ip, ORB_ID(actuator_outputs), _actuator_outputs_sub[i], i);
+      send_one_uorb_msg(_ip, it->second, nullptr, 0, it->first, 0); ///TODO not right instance?
     }
   }
 
-  orb_check(_vehicle_status_sub, &updated);
-  if (updated) {
-    send_one_uorb_msg(_ip, ORB_ID(vehicle_status), _vehicle_status_sub, 0);
-  }
 }
-
-
 
 
 
