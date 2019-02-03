@@ -30,10 +30,12 @@
 #include <uORB/topics/vehicle_local_position_setpoint.h>
 #include <uORB/topics/system_power.h>
 #include <uORB/topics/battery_status.h>
+#include <uORB/topics/vehicle_gps_position.h>
 
 
 #include <limits>
 #include <map>
+#include <random>
 
 
 static int _fd;
@@ -49,7 +51,23 @@ static std::map<uint16_t, orb_advert_t> _uorb_hash_to_advert;
 
 static std::map<int, orb_id_t> _uorb_sub_to_orb_id;
 
+static std::normal_distribution<float> _normal_distribution(-1.0f, 1.0f);
+static std::default_random_engine _noise_gen;
+
+
 const int UORB_MSG_HEADER_LEN = 5;
+
+
+/// Some guesses as to accuracy of a fake accelerometer
+const float ACCEL_ABS_ERR = 1e-2f;
+const float GYRO_ABS_ERR = 1e-2f;
+const float MAG_ABS_ERR  = 1e-2f;
+const float GPS_ABS_ERR = 1e-3f;
+
+/// Fake home coordinates
+const float HOME_LAT = 37.8f;
+const float HOME_LON = -122.2f;
+const float HOME_ALT = 500.0f;
 
 
 //forward declarations
@@ -75,7 +93,6 @@ void prep_for_topic_transactions(orb_id_t orb_msg_id) {
   _uorb_hash_to_orb_id[hashval] = orb_msg_id;
   //create a map slot for the advert, but don't advertise yet (unless we want to publish)
   _uorb_hash_to_advert[hashval] = nullptr;
-
 }
 
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
@@ -223,50 +240,71 @@ float range_random(float min, float max)
   return (min + s * (max - min));
 }
 
+float get_noisy_value(float val, float err) {
+  return (val + err * _normal_distribution(_noise_gen));
+}
 
 void send_fake_msgs(Simulator::InternetProtocol via) {
-  {
-    sensor_gyro_s gyro = {};
 
-    gyro.timestamp = hrt_absolute_time();
-    gyro.device_id = 2293768;
+  sensor_gyro_s gyro_report = {
+    .timestamp = hrt_absolute_time(),
+    .device_id = 2293768,
 
-    gyro.x = range_random(-1.0, 1.0);
-    gyro.y = range_random(-1.0, 1.0);
-    gyro.z = range_random(-1.0, 1.0);
+    .x = get_noisy_value(0.001f, GYRO_ABS_ERR),
+    .y = get_noisy_value(0.001f, GYRO_ABS_ERR),
+    .z = get_noisy_value(0.001f, GYRO_ABS_ERR),
 
-    gyro.x_raw = gyro.x  * 1000.0f;
-    gyro.y_raw = gyro.y * 1000.0f;
-    gyro.z_raw = gyro.z * 1000.0f;
+    .x_raw = (int16_t)(gyro_report.x  * 1000.0f),
+    .y_raw = (int16_t)(gyro_report.y * 1000.0f),
+    .z_raw = (int16_t)(gyro_report.z * 1000.0f),
 
-    gyro.temperature = range_random(0.0, 32.0);
-
-    send_one_uorb_msg(via, ORB_ID(sensor_gyro), (uint8_t*)&gyro, sizeof(gyro), 0, 0);
-  }
-
-  system_power_s system_power = {
-    .timestamp =  hrt_absolute_time(),
-    .voltage5v_v = 5.0,
-    .voltage3v3_v = 3.3,
-    .v3v3_valid = 1,
-    .usb_connected = 0,
-    .brick_valid = 1,
-    .usb_valid = 0,
-    .servo_valid = 1,
-    .periph_5v_oc = 0,
-    .hipower_5v_oc = 0
+    .temperature = get_noisy_value(25.0f, 0.01f),
   };
-  send_one_uorb_msg(via, ORB_ID(system_power), (uint8_t*)&system_power, sizeof(system_power), 0, 0);
+  send_one_uorb_msg(via, ORB_ID(sensor_gyro), (uint8_t*)&gyro_report, sizeof(gyro_report), 0, 0);
 
 
-  battery_status_s batt_status =  {
-    .timestamp =  hrt_absolute_time(),
-    .voltage_v = 16.0,
-    .cell_count = 4,
-    .connected = true,
-    .system_source = true,
+  vehicle_gps_position_s gps_report = {
+    .timestamp = hrt_absolute_time(),
+    .lat = (int32_t)(1E7* get_noisy_value(HOME_LAT, GPS_ABS_ERR)),
+    .lon = (int32_t)(1E7* get_noisy_value(HOME_LON, GPS_ABS_ERR)),
+    .alt = (int32_t)(1E3* get_noisy_value(HOME_ALT, 0.01)),
+    .eph = 1e-2f,
+    .epv = 1e-2f,
+    .vel_m_s = get_noisy_value(0.01, 0.25f),
+    .vel_n_m_s = get_noisy_value(0.01, 0.25f),
+    .vel_e_m_s = get_noisy_value(0.01, 0.25f),
+    .vel_d_m_s = get_noisy_value(0.01, 0.25f),
+    .cog_rad = get_noisy_value(0.01f, 0.1f),
+    .fix_type = 3,
+    .satellites_used = 10,
   };
-  send_one_uorb_msg(via, ORB_ID(battery_status), (uint8_t*)&batt_status, sizeof(batt_status), 0, 0);
+  send_one_uorb_msg(via, ORB_ID(vehicle_gps_position), (uint8_t*)&gps_report, sizeof(gps_report), 0, 0);
+
+
+//  system_power_s system_power = {
+//    .timestamp =  hrt_absolute_time(),
+//    .voltage5v_v = 5.0,
+//    .voltage3v3_v = 3.3,
+//    .v3v3_valid = 1,
+//    .usb_connected = 0,
+//    .brick_valid = 1,
+//    .usb_valid = 0,
+//    .servo_valid = 1,
+//    .periph_5v_oc = 0,
+//    .hipower_5v_oc = 0
+//  };
+//  send_one_uorb_msg(via, ORB_ID(system_power), (uint8_t*)&system_power, sizeof(system_power), 0, 0);
+
+
+//  battery_status_s batt_status =  {
+//    .timestamp =  hrt_absolute_time(),
+//    .voltage_v = 16.0,
+//    .cell_count = 4,
+//    .connected = true,
+//    .system_source = true,
+//    .warning = battery_status_s::BATTERY_WARNING_CRITICAL,
+//  };
+//  send_one_uorb_msg(via, ORB_ID(battery_status), (uint8_t*)&batt_status, sizeof(batt_status), 0, 0);
 
 }
 
@@ -277,9 +315,10 @@ void Simulator::recv_loop() {
   prep_for_topic_transactions(ORB_ID(sensor_accel));
   prep_for_topic_transactions(ORB_ID(sensor_mag));
   prep_for_topic_transactions(ORB_ID(sensor_baro));
+  prep_for_topic_transactions(ORB_ID(vehicle_gps_position));
+
   prep_for_topic_transactions(ORB_ID(system_power));
   prep_for_topic_transactions(ORB_ID(battery_status));
-
 
 
   init_connection();
@@ -334,12 +373,12 @@ void Simulator::recv_loop() {
         }
 
         if (ORB_ID(actuator_outputs) != orb_msg_id) {
-          int ret = orb_publish_auto(orb_msg_id, &handle, (const void *) &offset_buf[5], &instance_id,
+          int ret = orb_publish_auto(orb_msg_id, &handle, (const void *) &offset_buf[UORB_MSG_HEADER_LEN], &instance_id,
                                      ORB_PRIO_DEFAULT);
           if (OK != ret) {
             PX4_ERR("publish err: %d", ret);
           } else {
-            PX4_DEBUG("published: %s [%d]", orb_msg_id->o_name, instance_id);
+            PX4_INFO("pub: %s [%d]", orb_msg_id->o_name, instance_id);
             //TODO better way to update the handle?
             _uorb_hash_to_advert[hashval] = handle;
           }
@@ -444,7 +483,7 @@ void send_one_uorb_msg(Simulator::InternetProtocol via, orb_id_t orb_msg_id,
     }
 
     if (sent_len > 0) {
-      PX4_DEBUG("sent %s 0x%x %d %d",orb_msg_id->o_name, hash_val, instance_id, payload_len);
+      PX4_INFO("sent %s 0x%x %d %d",orb_msg_id->o_name, hash_val, instance_id, payload_len);
     }
   }
 
