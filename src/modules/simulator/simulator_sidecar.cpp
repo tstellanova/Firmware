@@ -244,7 +244,7 @@ float get_noisy_value(float val, float err) {
   return (val + err * _normal_distribution(_noise_gen));
 }
 
-void send_fake_msgs(Simulator::InternetProtocol via) {
+void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
   sensor_gyro_s gyro_report = {
     .timestamp = hrt_absolute_time(),
@@ -263,25 +263,28 @@ void send_fake_msgs(Simulator::InternetProtocol via) {
   send_one_uorb_msg(via, ORB_ID(sensor_gyro), (uint8_t*)&gyro_report, sizeof(gyro_report), 0, 0);
 
 
+}
+
+void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
+
   vehicle_gps_position_s gps_report = {
-    .timestamp = hrt_absolute_time(),
-    .lat = (int32_t)(1E7* get_noisy_value(HOME_LAT, GPS_ABS_ERR)),
-    .lon = (int32_t)(1E7* get_noisy_value(HOME_LON, GPS_ABS_ERR)),
-    .alt = (int32_t)(1E3* get_noisy_value(HOME_ALT, 0.01)),
-    .eph = 1e-2f,
-    .epv = 1e-2f,
-    .vel_m_s = get_noisy_value(0.01, 0.25f),
-    .vel_n_m_s = get_noisy_value(0.01, 0.25f),
-    .vel_e_m_s = get_noisy_value(0.01, 0.25f),
-    .vel_d_m_s = get_noisy_value(0.01, 0.25f),
-    .cog_rad = get_noisy_value(0.01f, 0.1f),
-    .fix_type = 3,
-    .satellites_used = 10,
+      .timestamp = hrt_absolute_time(),
+      .lat = (int32_t)(1E7* get_noisy_value(HOME_LAT, GPS_ABS_ERR)),
+      .lon = (int32_t)(1E7* get_noisy_value(HOME_LON, GPS_ABS_ERR)),
+      .alt = (int32_t)(1E3* get_noisy_value(HOME_ALT, 0.01)),
+      .eph = 1e-2f,
+      .epv = 1e-2f,
+      .vel_m_s = get_noisy_value(0.01, 0.25f),
+      .vel_n_m_s = get_noisy_value(0.01, 0.25f),
+      .vel_e_m_s = get_noisy_value(0.01, 0.25f),
+      .vel_d_m_s = get_noisy_value(0.01, 0.25f),
+      .cog_rad = get_noisy_value(0.01f, 0.1f),
+      .fix_type = 3,
+      .satellites_used = 10,
   };
   send_one_uorb_msg(via, ORB_ID(vehicle_gps_position), (uint8_t*)&gps_report, sizeof(gps_report), 0, 0);
 
-
-//  system_power_s system_power = {
+  //  system_power_s system_power = {
 //    .timestamp =  hrt_absolute_time(),
 //    .voltage5v_v = 5.0,
 //    .voltage3v3_v = 3.3,
@@ -296,17 +299,18 @@ void send_fake_msgs(Simulator::InternetProtocol via) {
 //  send_one_uorb_msg(via, ORB_ID(system_power), (uint8_t*)&system_power, sizeof(system_power), 0, 0);
 
 
-//  battery_status_s batt_status =  {
-//    .timestamp =  hrt_absolute_time(),
-//    .voltage_v = 16.0,
-//    .cell_count = 4,
-//    .connected = true,
-//    .system_source = true,
+  battery_status_s batt_report =  {
+    .timestamp =  hrt_absolute_time(),
+    .voltage_v = 16.0,
+    .cell_count = 4,
+    .connected = true,
+    .system_source = true,
 //    .warning = battery_status_s::BATTERY_WARNING_CRITICAL,
-//  };
-//  send_one_uorb_msg(via, ORB_ID(battery_status), (uint8_t*)&batt_status, sizeof(batt_status), 0, 0);
+  };
+  send_one_uorb_msg(via, ORB_ID(battery_status), (uint8_t*)&batt_report, sizeof(batt_report), 0, 0);
 
 }
+
 
 void Simulator::recv_loop() {
 
@@ -336,7 +340,10 @@ void Simulator::recv_loop() {
       // Timed out.
       //TODO temporary: force publish some attitude values
 
-      send_fake_msgs(_ip);
+      for (int i = 0; i < 5; i++) {
+        send_fast_cadence_fake_sensors(_ip);
+      }
+      send_slow_cadence_fake_sensors(_ip);
 
       continue;
     }
@@ -378,7 +385,7 @@ void Simulator::recv_loop() {
           if (OK != ret) {
             PX4_ERR("publish err: %d", ret);
           } else {
-            PX4_INFO("pub: %s [%d]", orb_msg_id->o_name, instance_id);
+            PX4_DEBUG("pub: %s [%d]", orb_msg_id->o_name, instance_id);
             //TODO better way to update the handle?
             _uorb_hash_to_advert[hashval] = handle;
           }
@@ -483,7 +490,7 @@ void send_one_uorb_msg(Simulator::InternetProtocol via, orb_id_t orb_msg_id,
     }
 
     if (sent_len > 0) {
-      PX4_INFO("sent %s 0x%x %d %d",orb_msg_id->o_name, hash_val, instance_id, payload_len);
+      PX4_DEBUG("sent %s 0x%x %d %d",orb_msg_id->o_name, hash_val, instance_id, payload_len);
     }
   }
 
