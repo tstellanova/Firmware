@@ -304,11 +304,11 @@ void Simulator::recv_loop() {
 
     if (pret < 0) {
       PX4_WARN("poll error %d, %d", pret, errno);
-      continue;
+      break;
     }
 
     if (fds[0].revents & POLLIN) {
-      int avail_len = recvfrom(_dest_sock_fd,  _recvbuf, sizeof(_recvbuf), 0,
+      ssize_t avail_len = recvfrom(_dest_sock_fd,  _recvbuf, sizeof(_recvbuf), 0,
                          (struct sockaddr *) &_srcaddr, (socklen_t * ) & _addrlen);
 
       uint8_t* offset_buf = &_recvbuf[0];
@@ -393,7 +393,7 @@ void Simulator::send_loop()
 
     if (pret < 0) {
       PX4_ERR("poll error %s", strerror(errno));
-      continue;
+      break;
     }
 
     if (fds[0].revents & POLLIN) {
