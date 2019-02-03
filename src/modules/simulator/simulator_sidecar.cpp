@@ -69,6 +69,7 @@ const float HOME_LAT = 37.8f;
 const float HOME_LON = -122.2f;
 const float HOME_ALT = 500.0f;
 
+const float ACCEL_ONE_G = 9.80665f;	// m/s/s
 
 //forward declarations
 void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadata *meta, uint8_t* src, size_t len, int handle, uint8_t instance_id);
@@ -262,6 +263,43 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
   };
   send_one_uorb_msg(via, ORB_ID(sensor_gyro), (uint8_t*)&gyro_report, sizeof(gyro_report), 0, 0);
 
+
+  float xacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
+  float yacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
+  float zacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
+
+  sensor_accel_s accel_report = {
+      .timestamp = hrt_absolute_time(),
+      .device_id = 1376264,
+      .x_raw = (int16_t)(xacc / (ACCEL_ONE_G / 1000.0f)),
+      .y_raw = (int16_t)(yacc / (ACCEL_ONE_G / 1000.0f)),
+      .z_raw = (int16_t)(zacc / (ACCEL_ONE_G / 1000.0f)),
+      .x = xacc,
+      .y = yacc,
+      .z = zacc,
+
+      .temperature = 25.0f,
+  };
+  send_one_uorb_msg(via, ORB_ID(sensor_accel), (uint8_t*)&accel_report, sizeof(accel_report), 0, 0);
+
+
+  float xmag = get_noisy_value(0.001,  MAG_ABS_ERR);
+  float ymag = get_noisy_value(0.001, MAG_ABS_ERR);
+  float zmag = get_noisy_value(0.001, MAG_ABS_ERR);
+
+  mag_report mag_report = {
+      .timestamp = hrt_absolute_time(),
+      .device_id = 196616,
+      .x_raw = (int16_t)(xmag * 1000.0f),
+      .y_raw = (int16_t)(ymag * 1000.0f),
+      .z_raw = (int16_t)(zmag * 1000.0f),
+      .x = xmag,
+      .y = ymag,
+      .z = zmag,
+
+      .temperature = 25.0f,
+  };
+  send_one_uorb_msg(via, ORB_ID(sensor_mag), (uint8_t*)&mag_report, sizeof(mag_report), 0, 0);
 
 }
 
