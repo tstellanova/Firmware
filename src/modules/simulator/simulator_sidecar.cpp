@@ -69,13 +69,31 @@ const float HOME_LAT = 37.8f;
 const float HOME_LON = -122.2f;
 const float HOME_ALT = 500.0f;
 
-const float ACCEL_ONE_G = 9.80665f;	// m/s/s
 
 //forward declarations
 void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadata *meta, uint8_t* src, size_t len, int handle, uint8_t instance_id);
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval);
 void prep_for_topic_transactions(orb_id_t orb_msg_id);
+uint16_t hash_from_msg_id(orb_id_t orb_msg_id);
 
+
+const double STD_PRESS = 101325.0;  // static pressure at sea level (Pa)
+const double  STD_TEMP = 288.15;    // standard temperature at sea level (K)
+const double LAPSE_RATE = -0.0065;   // standard temp altitude lapse rate (K/m)
+const double MOL_MASS  = 0.0289644;  // molar mass of Earth's air (kg/mol)
+const double GAS_CONSTANT_R  = 8.31432;    // universal gas constant, R
+const double ACCEL_ONE_G = 9.80665f;	//gravity acceleration (m/s^2)
+
+
+/// Convert altitude (meters) to standard barometric pressure (Pascals)
+/// Note: this formula is likely only useful under 10k feet
+float altitude_to_baro_pressure(float alt)  {
+  double big_alt = (double)alt;
+  double base = STD_TEMP / (STD_TEMP + (LAPSE_RATE * big_alt));
+  double exp = (ACCEL_ONE_G * MOL_MASS) / (GAS_CONSTANT_R * LAPSE_RATE);
+  double val = STD_PRESS * pow(base, exp);
+  return (float)val;
+}
 
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id) {
   int namelen = strlen(orb_msg_id->o_name);
@@ -301,6 +319,20 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
   };
   send_one_uorb_msg(via, ORB_ID(sensor_mag), (uint8_t*)&mag_report, sizeof(mag_report), 0, 0);
 
+  // In order for sensor fusion to align,
+  // baro pressure needs to match the altitude given by GPS
+  float shared_alt = get_noisy_value(HOME_ALT, 0.1);
+  float abs_pressure =  altitude_to_baro_pressure(shared_alt);
+
+  sensor_baro_s baro_report = {
+    .timestamp = hrt_absolute_time(),
+    .device_id = 478459,
+    .pressure = abs_pressure,
+    .temperature = 25.0f,
+  };
+  send_one_uorb_msg(via, ORB_ID(sensor_baro), (uint8_t*)&baro_report, sizeof(baro_report), 0, 0);
+
+
 }
 
 void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
@@ -309,7 +341,7 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
       .timestamp = hrt_absolute_time(),
       .lat = (int32_t)(1E7* get_noisy_value(HOME_LAT, GPS_ABS_ERR)),
       .lon = (int32_t)(1E7* get_noisy_value(HOME_LON, GPS_ABS_ERR)),
-      .alt = (int32_t)(1E3* get_noisy_value(HOME_ALT, 0.01)),
+      .alt = (int32_t)(1E3* get_noisy_value(HOME_ALT, 0.1)),
       .eph = 1e-2f,
       .epv = 1e-2f,
       .vel_m_s = get_noisy_value(0.01, 0.25f),
