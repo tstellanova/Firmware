@@ -36,6 +36,7 @@
 #include <limits>
 #include <map>
 #include <random>
+#include <modules/uORB/uORB.h>
 
 
 static int _fd;
@@ -50,6 +51,8 @@ static std::map<uint16_t, orb_id_t> _uorb_hash_to_orb_id;
 static std::map<uint16_t, orb_advert_t> _uorb_hash_to_advert;
 
 static std::map<int, orb_id_t> _uorb_sub_to_orb_id;
+static std::map<orb_id_t, int> _orb_id_to_sub_handle;
+
 
 static std::normal_distribution<float> _normal_distribution(-1.0f, 1.0f);
 static std::default_random_engine _noise_gen;
@@ -71,7 +74,8 @@ const float HOME_ALT = 500.0f;
 
 
 //forward declarations
-void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadata *meta, uint8_t* src, size_t len, int handle, uint8_t instance_id);
+void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadata *meta,
+    uint8_t* src, size_t len, int handle, uint8_t instance_id);
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval);
 void prep_for_topic_transactions(orb_id_t orb_msg_id);
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id);
@@ -124,6 +128,8 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
     }
 
     _uorb_sub_to_orb_id[handle] = orb_msg_id;
+    _orb_id_to_sub_handle[orb_msg_id] = handle;
+
     //be prepared to send or receive these from remote partner
     prep_for_topic_transactions(orb_msg_id);
   }
@@ -284,7 +290,7 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
   float xacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
   float yacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
-  float zacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
+  float zacc = get_noisy_value(ACCEL_ONE_G, ACCEL_ABS_ERR);
 
   sensor_accel_s accel_report = {
       .timestamp = hrt_absolute_time(),
@@ -317,7 +323,16 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
       .temperature = 25.0f,
   };
-  send_one_uorb_msg(via, ORB_ID(sensor_mag), (uint8_t*)&mag_report, sizeof(mag_report), 0, 0);
+//  int mag_instance_id = 0;
+//  uint16_t  hashval = hash_from_msg_id(ORB_ID(sensor_mag));
+//  orb_advert_t advert = _uorb_hash_to_advert[hashval];
+//  if (nullptr != advert) {
+//    orb_publish_auto(ORB_ID(sensor_mag), &advert, (uint8_t *) &mag_report, &mag_instance_id,
+//                     ORB_PRIO_DEFAULT);
+//  }
+//  else {
+    send_one_uorb_msg(via, ORB_ID(sensor_mag), (uint8_t *) &mag_report, sizeof(mag_report), 0, 0);
+//  }
 
   // In order for sensor fusion to align,
   // baro pressure needs to match the altitude given by GPS
@@ -440,24 +455,33 @@ void Simulator::recv_loop() {
 
 //        PX4_INFO("rcvd 0x%x %d %d", hashval, instance_id, payload_len);
         orb_id_t orb_msg_id = _uorb_hash_to_orb_id[hashval];
-        orb_advert_t handle = _uorb_hash_to_advert[hashval];
+        orb_advert_t advert = _uorb_hash_to_advert[hashval];
 
         if (nullptr == orb_msg_id) {
-          PX4_INFO("hash 0x%x msg_id %p handle %p", hashval, orb_msg_id, handle);
+          PX4_INFO("hash 0x%x msg_id %p advert %p", hashval, orb_msg_id, advert);
           offset_buf += 1;
           avail_len -= 1;
           continue;
         }
 
         if (ORB_ID(actuator_outputs) != orb_msg_id) {
-          int ret = orb_publish_auto(orb_msg_id, &handle, (const void *) &offset_buf[UORB_MSG_HEADER_LEN], &instance_id,
-                                     ORB_PRIO_DEFAULT);
+          int ret = orb_publish_auto(
+              orb_msg_id,
+              &advert,
+              (const void *) &offset_buf[UORB_MSG_HEADER_LEN],
+              &instance_id,
+              ORB_PRIO_HIGH);
+
+          if (_uorb_hash_to_advert[hashval] != advert) {
+            _uorb_hash_to_advert[hashval] = advert;
+            PX4_INFO("new %s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[hashval]);
+          }
+
           if (OK != ret) {
             PX4_ERR("publish err: %d", ret);
-          } else {
+          }
+          else {
             PX4_DEBUG("pub: %s [%d]", orb_msg_id->o_name, instance_id);
-            //TODO better way to update the handle?
-            _uorb_hash_to_advert[hashval] = handle;
           }
         }
 
@@ -520,16 +544,20 @@ void Simulator::send_loop()
 }
 
 
-void send_one_uorb_msg(Simulator::InternetProtocol via, orb_id_t orb_msg_id,
-    uint8_t* src, size_t len,
-    int handle, uint8_t instance_id) {
+void send_one_uorb_msg(
+    Simulator::InternetProtocol via,
+    orb_id_t orb_msg_id,
+    uint8_t* src,
+    size_t len,
+    int handle,
+    uint8_t instance_id) {
   //only bother processing uorb messages if we have a connected partner
   if (_dest_sock_fd > 0) {
     if (nullptr == src) {
-      orb_copy(orb_msg_id, handle, (void *) &_sendbuf[4]);
+      orb_copy(orb_msg_id, handle, (void *) &_sendbuf[UORB_MSG_HEADER_LEN]);
     }
     else {
-      memcpy((void *) &_sendbuf[4], src, len);
+      memcpy((void *) &_sendbuf[UORB_MSG_HEADER_LEN], src, len);
     }
 
     uint16_t payload_len = orb_msg_id->o_size;
