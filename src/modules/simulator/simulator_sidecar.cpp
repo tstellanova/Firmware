@@ -65,9 +65,9 @@ const int UORB_MSG_HEADER_LEN = 5;
 
 
 /// Some guesses as to accuracy of a fake accelerometer
-const float ACCEL_ABS_ERR = 1e-1f;
-const float GYRO_ABS_ERR = 1e-1f;
-const float MAG_ABS_ERR  = 1e-1f;
+const float ACCEL_ABS_ERR = 1e-6f;
+const float GYRO_ABS_ERR = 1e-6f;
+const float MAG_ABS_ERR  = 1e-6f;
 const float GPS_ABS_ERR = 1e-6f;
 
 /// Fake home coordinates
@@ -80,7 +80,6 @@ const float HOME_ALT = 500.0f;
 void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadata *meta,
     uint8_t* src, size_t len, int handle, uint8_t instance_id);
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval);
-//void prep_for_topic_transactions(orb_id_t orb_msg_id);
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id, uint8_t instance_id);
 void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf);
 
@@ -95,8 +94,15 @@ unsigned long get_simulated_external_usec() {
 
 void update_px4_clock(unsigned long usec) {
   struct timespec ts;
-  abstime_to_ts(&ts, usec);
+  memset(&ts, 0, sizeof(ts));
+  // get the whole seconds
+  ts.tv_sec = usec / 1000000ULL;
+  // get the remainder microseconds and convert to nanoseconds
+  ts.tv_nsec = (usec % 1000000ULL) * 1000;
   px4_clock_settime(CLOCK_MONOTONIC, &ts);
+
+//  abstime_to_ts(&ts, usec);
+//  px4_clock_settime(CLOCK_MONOTONIC, &ts);
 //  PX4_WARN("update_px4_clock: %lu",usec);
 }
 
@@ -128,18 +134,6 @@ uint16_t hash_from_msg_id(orb_id_t orb_msg_id, uint8_t instance_id) {
 }
 
 
-/**
- * Prepare to send or receive serialized uorb messages with the given ID
- *
- * @param orb_msg_id
- */
-//void prep_for_topic_transactions(orb_id_t orb_msg_id) {
-//  uint16_t hashval = hash_from_msg_id(orb_msg_id, 0);
-//  // the map of encoded hashval to orb_id
-//  _uorb_hash_to_orb_id[hashval] = orb_msg_id;
-//  //create a map slot for the advert, but don't advertise yet (unless we want to publish)
-//  _uorb_hash_to_advert[hashval] = nullptr;
-//}
 
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
 
@@ -152,9 +146,6 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
 
     _uorb_sub_to_orb_id[handle] = orb_msg_id;
     _orb_id_to_sub_handle[orb_msg_id] = handle;
-
-    //be prepared to send or receive these from remote partner
-    //prep_for_topic_transactions(orb_msg_id);
   }
   else {
     PX4_ERR("orb_subscribe_multi %s failed (%i)", orb_msg_id->o_name, errno);
@@ -166,10 +157,9 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
 
 void Simulator::init()
 {
-
-//  std::seed_seq seq{1,2,3,4,5};
-//  _noise_gen.seed(seq);
-
+  //TODO temp -- normally we'd update the clock based on eg HIL_SENSOR
+  unsigned long start_time = get_simulated_external_usec();
+  update_px4_clock(start_time);
 
   PX4_WARN("Simulator::init at %llu ", hrt_absolute_time());
   _fd = -1;
@@ -294,6 +284,10 @@ float get_noisy_value(float val, float err) {
 void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
   unsigned long common_time =  hrt_absolute_time();
+  if (common_time == 0) {
+    PX4_WARN("bogus hrt");
+    return;
+  }
 
   sensor_gyro_s gyro_report = {
     .timestamp = common_time,
@@ -303,9 +297,9 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
     .y_integral = 1.0f,
     .z_integral = 1.0f,
 
-    .x = get_noisy_value(0.01f, GYRO_ABS_ERR),
-    .y = get_noisy_value(0.01f, GYRO_ABS_ERR),
-    .z = get_noisy_value(0.01f, GYRO_ABS_ERR),
+    .x = get_noisy_value(0.001f, GYRO_ABS_ERR),
+    .y = get_noisy_value(0.001f, GYRO_ABS_ERR),
+    .z = get_noisy_value(0.001f, GYRO_ABS_ERR),
 
     .x_raw = (int16_t)(gyro_report.x * 1E3),
     .y_raw = (int16_t)(gyro_report.y * 1E3),
@@ -313,7 +307,8 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
     .temperature = get_noisy_value(25.0f, 0.01f),
   };
-  send_one_uorb_msg(via, ORB_ID(sensor_gyro), (uint8_t*)&gyro_report, sizeof(gyro_report), 0, 0);
+  //send_one_uorb_msg(via, ORB_ID(sensor_gyro), (uint8_t*)&gyro_report, sizeof(gyro_report), 0, 0);
+  publish_uorb_msg(ORB_ID(sensor_gyro),0, (const void*) &gyro_report);
 //  PX4_WARN("gyro x: %f", (double) gyro_report.x);
 
   float xacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
@@ -332,7 +327,8 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
       .temperature = get_noisy_value(25.0f, 0.01f),
   };
-  send_one_uorb_msg(via, ORB_ID(sensor_accel), (uint8_t*)&accel_report, sizeof(accel_report), 0, 0);
+//  send_one_uorb_msg(via, ORB_ID(sensor_accel), (uint8_t*)&accel_report, sizeof(accel_report), 0, 0);
+  publish_uorb_msg(ORB_ID(sensor_accel),0, (const void*) &accel_report);
 
 
   float xmag = get_noisy_value(0.001,  MAG_ABS_ERR);
@@ -351,8 +347,23 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
       .temperature = get_noisy_value(25.0f, 0.01f),
   };
-  send_one_uorb_msg(via, ORB_ID(sensor_mag), (uint8_t *) &mag_report, sizeof(mag_report), 0, 0);
+//  send_one_uorb_msg(via, ORB_ID(sensor_mag), (uint8_t *) &mag_report, sizeof(mag_report), 0, 0);
+  publish_uorb_msg(ORB_ID(sensor_mag),0, (const void*) &mag_report);
 
+
+  // In order for sensor fusion to align,
+  // baro pressure needs to match the altitude given by GPS
+  float shared_alt = get_noisy_value(HOME_ALT, 0.1);
+  float abs_pressure =  altitude_to_baro_pressure(shared_alt);
+
+  sensor_baro_s baro_report = {
+      .timestamp = common_time,
+      .device_id = 478459,
+      .pressure = abs_pressure,
+      .temperature = 25.0f,
+  };
+//  send_one_uorb_msg(via, ORB_ID(sensor_baro), (uint8_t*)&baro_report, sizeof(baro_report), 0, 0);
+  publish_uorb_msg(ORB_ID(sensor_baro),0, (const void*) &baro_report);
 
 
 }
@@ -403,18 +414,6 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
   send_fake_gps_msgs(via);
 
-  // In order for sensor fusion to align,
-  // baro pressure needs to match the altitude given by GPS
-  float shared_alt = get_noisy_value(HOME_ALT, 0.1);
-  float abs_pressure =  altitude_to_baro_pressure(shared_alt);
-
-  sensor_baro_s baro_report = {
-      .timestamp = common_time,
-      .device_id = 478459,
-      .pressure = abs_pressure,
-      .temperature = 25.0f,
-  };
-  send_one_uorb_msg(via, ORB_ID(sensor_baro), (uint8_t*)&baro_report, sizeof(baro_report), 0, 0);
 
 
 
@@ -472,19 +471,6 @@ void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf) {
 
 void Simulator::recv_loop() {
 
-//  // these are values we expect to be sent from our remote partner
-//  prep_for_topic_transactions(ORB_ID(sensor_gyro));
-//  prep_for_topic_transactions(ORB_ID(sensor_accel));
-//  prep_for_topic_transactions(ORB_ID(sensor_mag));
-//  prep_for_topic_transactions(ORB_ID(sensor_baro));
-//  prep_for_topic_transactions(ORB_ID(vehicle_gps_position));
-//  prep_for_topic_transactions(ORB_ID(vehicle_global_position));
-//
-//  prep_for_topic_transactions(ORB_ID(system_power));
-//  prep_for_topic_transactions(ORB_ID(battery_status));
-
-
-
   init_connection();
 
   struct pollfd fds[2];
@@ -502,6 +488,9 @@ void Simulator::recv_loop() {
     //TODO temporary: force publish some attitude values
     //TODO these will eventually come from external partner
     send_count++;
+
+    update_px4_clock(get_simulated_external_usec());
+
     send_fast_cadence_fake_sensors(_ip);
     if ((send_count % 5) == 0) {
       send_slow_cadence_fake_sensors(_ip);
@@ -524,9 +513,6 @@ void Simulator::recv_loop() {
                          (struct sockaddr *) &_srcaddr, (socklen_t * ) & _addrlen);
 
 
-      if (avail_len > 0) {
-        update_px4_clock(get_simulated_external_usec());
-      }
       uint8_t* offset_buf = &_recvbuf[0];
       while (avail_len > 0) {
         uint16_t hashval = (offset_buf[0] << 8) + offset_buf[1];
@@ -681,8 +667,7 @@ void Simulator::poll_topics()
 
 void Simulator::runloop() {
 
-  //TODO temp -- normally we'd update the clock based on eg HIL_SENSOR
-  update_px4_clock(get_simulated_external_usec());
+
 
   start_sender();
 
