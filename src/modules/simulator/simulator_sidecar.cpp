@@ -444,6 +444,20 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
 }
 
+void do_local_simulation(Simulator::InternetProtocol via) {
+
+  //TODO temporary: force publish some attitude values
+  //TODO these will eventually come from external partner
+
+  update_px4_clock(get_simulated_external_usec());
+
+  send_fast_cadence_fake_sensors(via);
+//  if ((send_count % 5) == 0) {
+//    send_slow_cadence_fake_sensors(_ip);
+//  }
+}
+
+
 
 void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf) {
   uint16_t hashval = hash_from_msg_id( orb_msg_id, instance_id);
@@ -483,18 +497,10 @@ void Simulator::recv_loop() {
 
   PX4_WARN("Wait to recv msgs from partner...");
 
-  uint32_t  send_count = 0;
   while (true) {
+
     //TODO temporary: force publish some attitude values
-    //TODO these will eventually come from external partner
-    send_count++;
-
-    update_px4_clock(get_simulated_external_usec());
-
-    send_fast_cadence_fake_sensors(_ip);
-    if ((send_count % 5) == 0) {
-      send_slow_cadence_fake_sensors(_ip);
-    }
+    do_local_simulation(_ip);
 
     // wait for new messages to arrive
     int pret = ::poll(&fds[0], fd_count, 1000);
