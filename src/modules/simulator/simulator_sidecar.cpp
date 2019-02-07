@@ -85,7 +85,7 @@ void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf);
 
 
 /// Use unix time to simulate actual time
-unsigned long get_simulated_external_usec() {
+unsigned long get_os_clock_usec() {
   struct timeval tv;
   gettimeofday(&tv,NULL);
   unsigned long time_in_micros = 1000000 * tv.tv_sec + tv.tv_usec;
@@ -154,12 +154,15 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
   return handle;
 }
 
+void init_simulated_clock() {
+  unsigned long start_time = get_os_clock_usec();
+  update_px4_clock(start_time);
+}
 
 void Simulator::init()
 {
   //TODO temp -- normally we'd update the clock based on eg HIL_SENSOR
-  unsigned long start_time = get_simulated_external_usec();
-  update_px4_clock(start_time);
+  init_simulated_clock();
 
   PX4_WARN("Simulator::init at %llu ", hrt_absolute_time());
   _fd = -1;
@@ -375,7 +378,7 @@ void send_fake_gps_msgs(Simulator::InternetProtocol via) {
 
   vehicle_gps_position_s gps_report = {
       .timestamp = common_time,
-      .time_utc_usec = get_simulated_external_usec(),
+      .time_utc_usec = get_os_clock_usec(),
       .lat = (int32_t)(1E7* get_noisy_value(HOME_LAT, GPS_ABS_ERR)),
       .lon = (int32_t)(1E7* get_noisy_value(HOME_LON, GPS_ABS_ERR)),
       .alt = common_alt,
@@ -414,10 +417,7 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
   send_fake_gps_msgs(via);
 
-
-
-
-  //  system_power_s system_power = {
+//  system_power_s system_power = {
 //    .timestamp =  common_time,
 //    .voltage5v_v = 5.0,
 //    .voltage3v3_v = 3.3,
@@ -449,7 +449,7 @@ void do_local_simulation(Simulator::InternetProtocol via) {
   //TODO temporary: force publish some attitude values
   //TODO these will eventually come from external partner
 
-  update_px4_clock(get_simulated_external_usec());
+  update_px4_clock(get_os_clock_usec());
 
   send_fast_cadence_fake_sensors(via);
 //  if ((send_count % 5) == 0) {
@@ -493,17 +493,14 @@ void Simulator::recv_loop() {
   fds[0].fd = _dest_sock_fd;
   fds[0].events = POLLIN;
 
-  send_slow_cadence_fake_sensors(_ip);
-
   PX4_WARN("Wait to recv msgs from partner...");
 
   while (true) {
-
     //TODO temporary: force publish some attitude values
     do_local_simulation(_ip);
 
     // wait for new messages to arrive
-    int pret = ::poll(&fds[0], fd_count, 1000);
+    int pret = ::poll(&fds[0], fd_count, 250);
     if (pret == 0) {
       // Timed out.
       continue;
