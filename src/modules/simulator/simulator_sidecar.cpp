@@ -100,10 +100,21 @@ void update_px4_clock(unsigned long usec) {
   // get the remainder microseconds and convert to nanoseconds
   ts.tv_nsec = (usec % 1000000ULL) * 1000;
   px4_clock_settime(CLOCK_MONOTONIC, &ts);
+  //TODO use abstime_to_ts instead?
+}
 
-//  abstime_to_ts(&ts, usec);
-//  px4_clock_settime(CLOCK_MONOTONIC, &ts);
-//  PX4_WARN("update_px4_clock: %lu",usec);
+static unsigned long _simulated_clock_usec = 0;
+
+void set_simulated_clock(uint32_t usec) {
+  _simulated_clock_usec = usec;
+}
+
+unsigned long get_simulated_clock_usec() {
+  return _simulated_clock_usec;
+}
+
+void increment_simulation_clock(uint32_t usec) {
+  _simulated_clock_usec += usec;
 }
 
 const double STD_PRESS = 101325.0;  // static pressure at sea level (Pa)
@@ -156,6 +167,8 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
 
 void init_simulated_clock() {
   unsigned long start_time = get_os_clock_usec();
+  start_time = (start_time / 1000) * 1000; //nearest ms boundary
+  set_simulated_clock(start_time);
   update_px4_clock(start_time);
 }
 
@@ -450,6 +463,9 @@ void do_local_simulation(Simulator::InternetProtocol via) {
   //TODO these will eventually come from external partner
 
   update_px4_clock(get_os_clock_usec());
+
+  increment_simulation_clock(100);
+//  update_px4_clock(get_simulated_clock_usec());
 
   send_fast_cadence_fake_sensors(via);
 //  if ((send_count % 5) == 0) {
