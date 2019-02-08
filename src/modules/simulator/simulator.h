@@ -413,7 +413,7 @@ private:
 
 
 	void init();
-  void init_connection();
+  bool init_connection();
 
   void start_sender();
   void runloop();

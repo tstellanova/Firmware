@@ -57,23 +57,35 @@ static std::map<int, orb_id_t> _uorb_sub_to_orb_id;
 static std::map<orb_id_t, int> _orb_id_to_sub_handle;
 
 
-static std::normal_distribution<float> _normal_distribution(0.0f, 6.0f);
+static std::normal_distribution<float> _normal_distribution(0.0f, 3.0f);
 static std::default_random_engine _noise_gen;
 
 
 const int UORB_MSG_HEADER_LEN = 5;
 
 
+
 /// Some guesses as to accuracy of a fake accelerometer
-const float ACCEL_ABS_ERR = 1e-6f;
-const float GYRO_ABS_ERR = 1e-6f;
-const float MAG_ABS_ERR  = 1e-6f;
+const float ACCEL_ABS_ERR = 0.05f;
+const float GYRO_ABS_ERR = 0.01f;
+const float MAG_ABS_ERR  = 0.005f;
 const float GPS_ABS_ERR = 1e-6f;
 
 /// Fake home coordinates
 const float HOME_LAT = 37.8f;
 const float HOME_LON = -122.2f;
 const float HOME_ALT = 500.0f;
+const float HOME_MAG[] = { 22535E-5, 5384E-5, 42217-5 };
+
+
+// Home magnetic declination
+//from https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml#igrfwmm
+//2019.10411,13.43814,61.24195,23169.0,48157.1,22534.6,5384.4,42217.4
+//One gauss equals 1×10−4 T
+// (nT / 1E9) * 1E4 = gauss
+// (nT/1E5) = gauss
+
+
 
 
 //forward declarations
@@ -93,23 +105,19 @@ unsigned long get_os_clock_usec() {
 }
 
 void update_px4_clock(unsigned long usec) {
-  struct timespec ts;
-  memset(&ts, 0, sizeof(ts));
-  // get the whole seconds
-  ts.tv_sec = usec / 1000000ULL;
-  // get the remainder microseconds and convert to nanoseconds
-  ts.tv_nsec = (usec % 1000000ULL) * 1000;
+  struct timespec ts = {};
+  abstime_to_ts(&ts, usec);
   px4_clock_settime(CLOCK_MONOTONIC, &ts);
   //TODO use abstime_to_ts instead?
 }
 
-static unsigned long _simulated_clock_usec = 0;
+static hrt_abstime _simulated_clock_usec = 0;
 
-void set_simulated_clock(uint32_t usec) {
+void set_simulated_clock(hrt_abstime usec) {
   _simulated_clock_usec = usec;
 }
 
-unsigned long get_simulated_clock_usec() {
+hrt_abstime get_simulated_clock_usec() {
   return _simulated_clock_usec;
 }
 
@@ -166,10 +174,13 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
 }
 
 void init_simulated_clock() {
-  unsigned long start_time = get_os_clock_usec();
-  start_time = (start_time / 1000) * 1000; //nearest ms boundary
+  hrt_abstime start_time = get_os_clock_usec();
+  start_time = (start_time / 1000) * 1000;
   set_simulated_clock(start_time);
   update_px4_clock(start_time);
+
+  PX4_WARN("Simulator::init with %llu %llu", start_time, hrt_absolute_time());
+
 }
 
 void Simulator::init()
@@ -177,7 +188,6 @@ void Simulator::init()
   //TODO temp -- normally we'd update the clock based on eg HIL_SENSOR
   init_simulated_clock();
 
-  PX4_WARN("Simulator::init at %llu ", hrt_absolute_time());
   _fd = -1;
   _dest_sock_fd = -1;
 
@@ -194,24 +204,28 @@ void Simulator::init()
 }
 
 
-void Simulator::start_sender() {
-
-  pthread_attr_t sender_thread_attr;
-  pthread_attr_init(&sender_thread_attr);
-  pthread_attr_setstacksize(&sender_thread_attr, PX4_STACK_ADJUSTED(4000));
+void start_thread(pthread_t *thread, void *(*start_routine) (void *)) {
+  pthread_attr_t thread_attr;
+  pthread_attr_init(&thread_attr);
+  pthread_attr_setstacksize(&thread_attr, PX4_STACK_ADJUSTED(4000));
 
   struct sched_param param;
-  (void)pthread_attr_getschedparam(&sender_thread_attr, &param);
+  (void)pthread_attr_getschedparam(&thread_attr, &param);
 
   param.sched_priority = SCHED_PRIORITY_DEFAULT;
-  (void)pthread_attr_setschedparam(&sender_thread_attr, &param);
+  (void)pthread_attr_setschedparam(&thread_attr, &param);
 
-  pthread_create(&_sender_thread, &sender_thread_attr, Simulator::sending_trampoline, nullptr);
-  pthread_attr_destroy(&sender_thread_attr);
-
+  pthread_create(thread, &thread_attr, start_routine, nullptr);
+  pthread_attr_destroy(&thread_attr);
 }
 
-void Simulator::init_connection() {
+void Simulator::start_sender() {
+  start_thread(&_sender_thread, Simulator::sending_trampoline);
+}
+
+
+
+bool Simulator::init_connection() {
   struct sockaddr_in _myaddr{};
   _myaddr.sin_family = AF_INET;
   _myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -220,12 +234,12 @@ void Simulator::init_connection() {
   if (_ip == InternetProtocol::UDP) {
     if ((_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
       PX4_ERR("Creating UDP socket failed: %s", strerror(errno));
-      return;
+      return false;
     }
 
     if (bind(_fd, (struct sockaddr *) &_myaddr, sizeof(_myaddr)) < 0) {
       PX4_ERR("bind for UDP port %i failed (%i)", _port, errno);
-      return;
+      return false;
     }
 
     PX4_INFO("Waiting for client to connect on UDP port %u", _port);
@@ -253,19 +267,18 @@ void Simulator::init_connection() {
     while (true) {
       if ((_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         PX4_ERR("Creating TCP socket failed: %s", strerror(errno));
-        return;
+        return  false;
       }
 
       int enable = 1;
       int ret = setsockopt(_fd, IPPROTO_TCP, TCP_NODELAY, (char*) &enable, sizeof(enable));
-
       if (ret != 0) {
         PX4_ERR("setsockopt failed: %s", strerror(errno));
       }
 
       if (bind(_fd, (struct sockaddr *) &_myaddr, sizeof(_myaddr)) < 0) {
         PX4_ERR("ERROR on binding");
-        return;
+        return false;
       }
 
       //start listening for clients
@@ -290,6 +303,7 @@ void Simulator::init_connection() {
     PX4_INFO("Client connected on TCP port %u.", _port);
   }
 
+  return true;
 }
 
 
@@ -327,8 +341,8 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
   publish_uorb_msg(ORB_ID(sensor_gyro),0, (const void*) &gyro_report);
 //  PX4_WARN("gyro x: %f", (double) gyro_report.x);
 
-  float xacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
-  float yacc = get_noisy_value(0.001, ACCEL_ABS_ERR);
+  float xacc = get_noisy_value(0.0, ACCEL_ABS_ERR);
+  float yacc = get_noisy_value(0.0, ACCEL_ABS_ERR);
   float zacc = get_noisy_value(ACCEL_ONE_G, ACCEL_ABS_ERR);
 
   sensor_accel_s accel_report = {
@@ -347,9 +361,9 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
   publish_uorb_msg(ORB_ID(sensor_accel),0, (const void*) &accel_report);
 
 
-  float xmag = get_noisy_value(0.001,  MAG_ABS_ERR);
-  float ymag = get_noisy_value(0.001, MAG_ABS_ERR);
-  float zmag = get_noisy_value(0.001, MAG_ABS_ERR);
+  float xmag = get_noisy_value(HOME_MAG[0], MAG_ABS_ERR);
+  float ymag = get_noisy_value(HOME_MAG[1], MAG_ABS_ERR);
+  float zmag = get_noisy_value(HOME_MAG[2], MAG_ABS_ERR);
 
   mag_report mag_report = {
       .timestamp = common_time ,
@@ -388,21 +402,20 @@ void send_fake_gps_msgs(Simulator::InternetProtocol via) {
   int32_t common_alt = (int32_t)(1E3* get_noisy_value(HOME_ALT, 0.1));
   unsigned long common_time =  hrt_absolute_time();
 
-
   vehicle_gps_position_s gps_report = {
       .timestamp = common_time,
-      .time_utc_usec = get_os_clock_usec(),
+      .time_utc_usec = get_simulated_clock_usec(),
       .lat = (int32_t)(1E7* get_noisy_value(HOME_LAT, GPS_ABS_ERR)),
       .lon = (int32_t)(1E7* get_noisy_value(HOME_LON, GPS_ABS_ERR)),
       .alt = common_alt,
       .alt_ellipsoid = common_alt,
       .eph = 1.0f,
       .epv = 2.0f,
-      .vel_m_s = get_noisy_value(0.01, 0.025f),
-      .vel_n_m_s = get_noisy_value(0.01, 0.025f),
-      .vel_e_m_s = get_noisy_value(0.01, 0.025f),
-      .vel_d_m_s = get_noisy_value(0.01, 0.025f),
-      .cog_rad = get_noisy_value(0.01f, 0.001f),
+      .vel_m_s = get_noisy_value(0.0, 0.025f),
+      .vel_n_m_s = get_noisy_value(0.0, 0.025f),
+      .vel_e_m_s = get_noisy_value(0.0, 0.025f),
+      .vel_d_m_s = get_noisy_value(0.0, 0.025f),
+      .cog_rad = get_noisy_value(0.0f, 0.001f),
       .vel_ned_valid = true,
       .fix_type = 3,
       .satellites_used = 10,
@@ -457,20 +470,37 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
 }
 
+
+#define SIMULATOR_TIME_RATIO 1
+
 void do_local_simulation(Simulator::InternetProtocol via) {
+  static hrt_abstime _last_realtime_clock = 0;
+  static hrt_abstime _last_fast_cadence_send = 0;
+  static hrt_abstime _last_slow_cadence_send = 0;
 
-  //TODO temporary: force publish some attitude values
-  //TODO these will eventually come from external partner
 
-  update_px4_clock(get_os_clock_usec());
+  hrt_abstime real_time = get_os_clock_usec();
+  hrt_abstime delta_time = (real_time - _last_realtime_clock);
+//  PX4_WARN("delta_time: %llu", delta_time);
+  _last_realtime_clock = real_time;
 
-  increment_simulation_clock(100);
-//  update_px4_clock(get_simulated_clock_usec());
+  for (int i = 0; i < SIMULATOR_TIME_RATIO; i++) {
+    increment_simulation_clock(delta_time);
 
-  send_fast_cadence_fake_sensors(via);
-//  if ((send_count % 5) == 0) {
-//    send_slow_cadence_fake_sensors(_ip);
-//  }
+    update_px4_clock(get_simulated_clock_usec());
+    hrt_abstime local_elapsed_usec = hrt_absolute_time();
+
+    if ((local_elapsed_usec - _last_fast_cadence_send) > 250) {
+      send_fast_cadence_fake_sensors(via);
+      _last_fast_cadence_send = local_elapsed_usec;
+
+      if ((local_elapsed_usec - _last_slow_cadence_send) > 1000000) {
+        send_slow_cadence_fake_sensors(via);
+        _last_slow_cadence_send = local_elapsed_usec;
+      }
+    }
+  }
+
 }
 
 
@@ -488,7 +518,7 @@ void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf) {
 
   if (_uorb_hash_to_advert[hashval] != advert) {
     _uorb_hash_to_advert[hashval] = advert;
-    PX4_INFO("new %s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[hashval]);
+    PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[hashval]);
   }
 
   if (OK != ret) {
@@ -499,9 +529,9 @@ void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf) {
   }
 }
 
-void Simulator::recv_loop() {
 
-  init_connection();
+
+void Simulator::recv_loop() {
 
   struct pollfd fds[2];
   memset(fds, 0, sizeof(fds));
@@ -512,10 +542,11 @@ void Simulator::recv_loop() {
   PX4_WARN("Wait to recv msgs from partner...");
 
   while (true) {
+
     //TODO temporary: force publish some attitude values
     do_local_simulation(_ip);
 
-    // wait for new messages to arrive
+    // wait for new messages to arrive on socket
     int pret = ::poll(&fds[0], fd_count, 250);
     if (pret == 0) {
       // Timed out.
@@ -589,15 +620,15 @@ void Simulator::send_loop()
     system_sleep(5);
   }
 
-  PX4_WARN("start Simulator::send_loop");
+  PX4_WARN("Simulator::send_loop");
 
   px4_pollfd_struct_t fds[1] = {};
   fds[0].fd = _actuator_outputs_sub[0];
   fds[0].events = POLLIN;
 
   while (true) {
-    // Wait for up to 100ms for data.
-    int pret = px4_poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), 100);
+    // Wait for up to 250ms for sentinel uorb topic to update
+    int pret = px4_poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), 250);
     if (pret == 0) {
       // Timed out, try again.
       continue;
@@ -686,11 +717,10 @@ void Simulator::poll_topics()
 
 void Simulator::runloop() {
 
-
-
-  start_sender();
-
-  recv_loop();
+  if (init_connection()) {
+    start_sender();
+    recv_loop();
+  }
 
   PX4_WARN("Simulator::runloop exit");
 }
