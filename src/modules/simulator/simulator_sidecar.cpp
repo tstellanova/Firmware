@@ -330,7 +330,7 @@ float get_noisy_value(float val, float err) {
   return (val + (err * _normal_distribution(_noise_gen)) );
 }
 
-void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
+void publish_local_fake_fast_cadence_sensors() {
 
   unsigned long common_time =  hrt_absolute_time();
   if (common_time == 0) {
@@ -410,7 +410,6 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
   };
   publish_uorb_msg(ORB_ID(sensor_baro),0, (const void*) &baro_report);
 
-
 }
 
 void send_fake_gps_msgs(Simulator::InternetProtocol via) {
@@ -488,11 +487,10 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
 #define SIMULATOR_TIME_RATIO 1
 
-void do_local_simulation(Simulator::InternetProtocol via) {
+void do_local_simulation() {
   static hrt_abstime _last_realtime_clock = 0;
   static hrt_abstime _last_fast_cadence_send = 0;
 //  static hrt_abstime _last_slow_cadence_send = 0;
-
 
   hrt_abstime real_time = get_os_clock_usec();
   hrt_abstime delta_time = (real_time - _last_realtime_clock);
@@ -506,7 +504,7 @@ void do_local_simulation(Simulator::InternetProtocol via) {
     hrt_abstime local_elapsed_usec = hrt_absolute_time();
 
     if ((local_elapsed_usec - _last_fast_cadence_send) > 125) {
-      send_fast_cadence_fake_sensors(via);
+      publish_local_fake_fast_cadence_sensors();
       _last_fast_cadence_send = local_elapsed_usec;
 
 //      if ((local_elapsed_usec - _last_slow_cadence_send) > 1000000) {
@@ -516,6 +514,7 @@ void do_local_simulation(Simulator::InternetProtocol via) {
     }
   }
 
+  PX4_INFO("do_local_simulation %llu", real_time);
 }
 
 
@@ -557,17 +556,16 @@ void Simulator::recv_loop() {
   fds[0].fd = _dest_sock_fd;
   fds[0].events = POLLIN;
 
+
   PX4_WARN("Wait to recv msgs from partner...");
 
   while (true) {
-
-    //TODO temporary: force publish some attitude values
-    do_local_simulation(_ip);
-
     // wait for new messages to arrive on socket
     int pret = ::poll(&fds[0], fd_count, 250);
     if (pret == 0) {
       // Timed out.
+      //TODO temporary: force publish some attitude values
+      do_local_simulation();
       continue;
     }
 
@@ -600,7 +598,6 @@ void Simulator::recv_loop() {
         // o_size uint16_t
         // payload
 
-        //PX4_INFO("rcvd 0x%x %d %d", hashval, instance_id, payload_len);
         //std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
         //_uorb_tuple_to_orb_id[key];
 
@@ -610,6 +607,9 @@ void Simulator::recv_loop() {
           offset_buf += 1;
           avail_len -= 1;
           continue;
+        }
+        else {
+          PX4_INFO("rcvd %s %d ", orb_msg_id->o_name, instance_id );
         }
 
         publish_uorb_msg(orb_msg_id, instance_id, (const uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN]);
