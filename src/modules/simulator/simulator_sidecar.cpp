@@ -41,6 +41,9 @@
 #include <random>
 #include <modules/uORB/uORB.h>
 
+// tuple of orb ID hash and instance ID
+typedef std::tuple<uint16_t,uint8_t> topic_instance_key;
+
 
 static int _fd;
 static int _dest_sock_fd;
@@ -51,10 +54,13 @@ static uint8_t _sendbuf[2048];
 static pthread_t _sender_thread;
 
 static std::map<uint16_t, orb_id_t> _uorb_hash_to_orb_id;
-static std::map<uint16_t, orb_advert_t> _uorb_hash_to_advert;
+static std::map<topic_instance_key, orb_advert_t> _uorb_hash_to_advert;
 
-static std::map<int, orb_id_t> _uorb_sub_to_orb_id;
-static std::map<orb_id_t, int> _orb_id_to_sub_handle;
+
+// track all of our uorb topic subscriptions
+typedef std::tuple<orb_id_t,uint8_t> sub_handle_ctx;
+static std::map<int, sub_handle_ctx> _uorb_sub_to_multi_orb_id;
+
 
 
 static std::normal_distribution<float> _normal_distribution(0.0f, 3.0f);
@@ -91,9 +97,9 @@ const float HOME_MAG[] = { 22535E-5, 5384E-5, 42217-5 };
 //forward declarations
 void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadata *meta,
     uint8_t* src, size_t len, int handle, uint8_t instance_id);
-int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval);
+int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval);
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id);
-void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf);
+void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf);
 
 
 /// Use unix time to simulate actual time
@@ -153,17 +159,15 @@ uint16_t hash_from_msg_id(orb_id_t orb_msg_id) {
 
 
 
-int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval) {
-
-  int handle =  orb_subscribe_multi(orb_msg_id, idx);
+int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval) {
+  int handle =  orb_subscribe_multi(orb_msg_id, instance_id);
   if (handle >= 0) {
-    PX4_INFO("subd %s [%0d]", orb_msg_id->o_name,  idx);
+    PX4_INFO("subd %s [%0d]", orb_msg_id->o_name,  instance_id);
     if (interval > 0) {
       orb_set_interval(handle, interval);
     }
 
-    _uorb_sub_to_orb_id[handle] = orb_msg_id;
-    _orb_id_to_sub_handle[orb_msg_id] = handle;
+    _uorb_sub_to_multi_orb_id[handle] = std::make_tuple(orb_msg_id, instance_id);
   }
   else {
     PX4_ERR("orb_subscribe_multi %s failed (%i)", orb_msg_id->o_name, errno);
@@ -184,6 +188,22 @@ void init_simulated_clock() {
 
 void Simulator::init()
 {
+  //create a map of all known uorb topics
+  size_t count_orb_topics = orb_topics_count();
+//  const struct orb_metadata *all_topics = reinterpret_cast<const orb_metadata *>(orb_get_topics());
+
+  const orb_metadata *const*all_topics = orb_get_topics();
+
+  PX4_INFO("begin topic mapping %lu %p",count_orb_topics, all_topics);
+
+  for (size_t i = 0; i < count_orb_topics; i++) {
+    orb_id_t topic = all_topics[i];
+    uint16_t hashval = hash_from_msg_id(topic);
+    _uorb_hash_to_orb_id[hashval] = topic;
+  }
+
+  PX4_INFO("done with topic map");
+
   //TODO temp -- normally we'd update the clock based on eg HIL_SENSOR
   init_simulated_clock();
 
@@ -196,8 +216,8 @@ void Simulator::init()
   }
   _vehicle_status_sub =  subscribe_to_multi_topic(ORB_ID(vehicle_status), 0, 0);
 
-  subscribe_to_multi_topic(ORB_ID(vehicle_local_position_setpoint), 0, 0);
-  subscribe_to_multi_topic(ORB_ID(trajectory_setpoint), 0, 0);
+//  subscribe_to_multi_topic(ORB_ID(vehicle_local_position_setpoint), 0, 0);
+//  subscribe_to_multi_topic(ORB_ID(trajectory_setpoint), 0, 0);
 
   this->_initialized = true;
 }
@@ -336,7 +356,6 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
     .temperature = get_noisy_value(25.0f, 0.01f),
   };
-  //send_one_uorb_msg(via, ORB_ID(sensor_gyro), (uint8_t*)&gyro_report, sizeof(gyro_report), 0, 0);
   publish_uorb_msg(ORB_ID(sensor_gyro),0, (const void*) &gyro_report);
 //  PX4_WARN("gyro x: %f", (double) gyro_report.x);
 
@@ -356,7 +375,6 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
       .temperature = get_noisy_value(25.0f, 0.01f),
   };
-//  send_one_uorb_msg(via, ORB_ID(sensor_accel), (uint8_t*)&accel_report, sizeof(accel_report), 0, 0);
   publish_uorb_msg(ORB_ID(sensor_accel),0, (const void*) &accel_report);
 
 
@@ -376,7 +394,6 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
       .temperature = get_noisy_value(25.0f, 0.01f),
   };
-//  send_one_uorb_msg(via, ORB_ID(sensor_mag), (uint8_t *) &mag_report, sizeof(mag_report), 0, 0);
   publish_uorb_msg(ORB_ID(sensor_mag),0, (const void*) &mag_report);
 
 
@@ -391,7 +408,6 @@ void send_fast_cadence_fake_sensors(Simulator::InternetProtocol via) {
       .pressure = abs_pressure,
       .temperature = 25.0f,
   };
-//  send_one_uorb_msg(via, ORB_ID(sensor_baro), (uint8_t*)&baro_report, sizeof(baro_report), 0, 0);
   publish_uorb_msg(ORB_ID(sensor_baro),0, (const void*) &baro_report);
 
 
@@ -440,7 +456,7 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 
   unsigned long common_time = hrt_absolute_time();
 
-  send_fake_gps_msgs(via);
+//  send_fake_gps_msgs(via);
 
 //  system_power_s system_power = {
 //    .timestamp =  common_time,
@@ -475,7 +491,7 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 void do_local_simulation(Simulator::InternetProtocol via) {
   static hrt_abstime _last_realtime_clock = 0;
   static hrt_abstime _last_fast_cadence_send = 0;
-  static hrt_abstime _last_slow_cadence_send = 0;
+//  static hrt_abstime _last_slow_cadence_send = 0;
 
 
   hrt_abstime real_time = get_os_clock_usec();
@@ -489,14 +505,14 @@ void do_local_simulation(Simulator::InternetProtocol via) {
     update_px4_clock(get_simulated_clock_usec());
     hrt_abstime local_elapsed_usec = hrt_absolute_time();
 
-    if ((local_elapsed_usec - _last_fast_cadence_send) > 250) {
+    if ((local_elapsed_usec - _last_fast_cadence_send) > 125) {
       send_fast_cadence_fake_sensors(via);
       _last_fast_cadence_send = local_elapsed_usec;
 
-      if ((local_elapsed_usec - _last_slow_cadence_send) > 1000000) {
-        send_slow_cadence_fake_sensors(via);
-        _last_slow_cadence_send = local_elapsed_usec;
-      }
+//      if ((local_elapsed_usec - _last_slow_cadence_send) > 1000000) {
+//        send_slow_cadence_fake_sensors(via);
+//        _last_slow_cadence_send = local_elapsed_usec;
+//      }
     }
   }
 
@@ -504,20 +520,23 @@ void do_local_simulation(Simulator::InternetProtocol via) {
 
 
 
-void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf) {
+void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf) {
   uint16_t hashval = hash_from_msg_id( orb_msg_id);
-  orb_advert_t advert = _uorb_hash_to_advert[hashval];
+  std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
+  orb_advert_t advert = _uorb_hash_to_advert[key];
+
+  int up_instance_id = instance_id;
 
   int ret = orb_publish_auto(
       orb_msg_id,
       &advert,
       buf,
-      &instance_id,
+      &up_instance_id,
       ORB_PRIO_HIGH);
 
-  if (_uorb_hash_to_advert[hashval] != advert) {
-    _uorb_hash_to_advert[hashval] = advert;
-    PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[hashval]);
+  if (_uorb_hash_to_advert[key] != advert) {
+    _uorb_hash_to_advert[key] = advert;
+    PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[key]);
   }
 
   if (OK != ret) {
@@ -561,7 +580,6 @@ void Simulator::recv_loop() {
       ssize_t avail_len = recvfrom(_dest_sock_fd,  _recvbuf, sizeof(_recvbuf), 0,
                          (struct sockaddr *) &_srcaddr, (socklen_t * ) & _addrlen);
 
-
       uint8_t* offset_buf = &_recvbuf[0];
       while (avail_len > 0) {
         //find the first magic marker
@@ -572,28 +590,29 @@ void Simulator::recv_loop() {
           continue;
         }
 
-        uint16_t hashval = (offset_buf[0] << 8) + offset_buf[1];
-        int instance_id = offset_buf[2];
-        uint16_t payload_len = (offset_buf[3] << 8) + offset_buf[4];
+        uint16_t hashval = (offset_buf[1] << 8) + offset_buf[2];
+        uint8_t instance_id = offset_buf[3];
+        uint16_t payload_len = (offset_buf[4] << 8) + offset_buf[5];
 
+        // uint8_t magic
         // o_name hash uint16_t
         // instance id uint8_t
         // o_size uint16_t
         // payload
 
-//        PX4_INFO("rcvd 0x%x %d %d", hashval, instance_id, payload_len);
-        orb_id_t orb_msg_id = _uorb_hash_to_orb_id[hashval];
+        //PX4_INFO("rcvd 0x%x %d %d", hashval, instance_id, payload_len);
+        //std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
+        //_uorb_tuple_to_orb_id[key];
 
+        orb_id_t orb_msg_id = _uorb_hash_to_orb_id[hashval];
         if (nullptr == orb_msg_id) {
-//          PX4_INFO("junk hash 0x%x msg_id %p advert %p", hashval, orb_msg_id, advert);
+          PX4_INFO("junk hash 0x%x instance %u ", hashval, instance_id);
           offset_buf += 1;
           avail_len -= 1;
           continue;
         }
 
-        if (ORB_ID(actuator_outputs) != orb_msg_id) {
-          publish_uorb_msg(orb_msg_id, instance_id, (const uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN]);
-        }
+        publish_uorb_msg(orb_msg_id, instance_id, (const uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN]);
 
         offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
         avail_len -= (UORB_MSG_HEADER_LEN + payload_len);
@@ -702,7 +721,7 @@ void send_one_uorb_msg(
     }
 
     if (sent_len > 0) {
-      PX4_INFO("sent %s 0x%x %u %u",orb_msg_id->o_name, hash_val, instance_id, payload_len);
+      PX4_DEBUG("sent %s 0x%x %u %u",orb_msg_id->o_name, hash_val, instance_id, payload_len);
     }
   }
 
@@ -711,13 +730,14 @@ void send_one_uorb_msg(
 void Simulator::poll_topics()
 {
   //check all subscribed topics for updates
-  std::map<int, orb_id_t>::iterator it;
 
-  for ( it = _uorb_sub_to_orb_id.begin(); it != _uorb_sub_to_orb_id.end(); it++ ) {
+  std::map<int, sub_handle_ctx>::iterator it;
+  for (it = _uorb_sub_to_multi_orb_id.begin(); it != _uorb_sub_to_multi_orb_id.end(); it++) {
     bool updated = false;
-    orb_check(it->first, &updated);
+    orb_check(it->first,  &updated);
     if (updated) {
-      send_one_uorb_msg(_ip, it->second, nullptr, 0, it->first, 0); ///TODO not right instance?
+      sub_handle_ctx ctx = it->second;
+      send_one_uorb_msg(_ip, std::get<0>(ctx), nullptr, 0, updated, std::get<1>(ctx));
     }
   }
 
