@@ -61,8 +61,8 @@ static std::normal_distribution<float> _normal_distribution(0.0f, 3.0f);
 static std::default_random_engine _noise_gen;
 
 
-const int UORB_MSG_HEADER_LEN = 5;
-
+const int UORB_MSG_HEADER_LEN = 6;
+const uint8_t UORB_MAGIC_V1 = 0xAA;
 
 
 /// Some guesses as to accuracy of a fake accelerometer
@@ -92,7 +92,7 @@ const float HOME_MAG[] = { 22535E-5, 5384E-5, 42217-5 };
 void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadata *meta,
     uint8_t* src, size_t len, int handle, uint8_t instance_id);
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int idx, int interval);
-uint16_t hash_from_msg_id(orb_id_t orb_msg_id, uint8_t instance_id);
+uint16_t hash_from_msg_id(orb_id_t orb_msg_id);
 void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf);
 
 
@@ -145,10 +145,9 @@ float altitude_to_baro_pressure(float alt)  {
 
 
 
-uint16_t hash_from_msg_id(orb_id_t orb_msg_id, uint8_t instance_id) {
+uint16_t hash_from_msg_id(orb_id_t orb_msg_id) {
   int namelen = strlen(orb_msg_id->o_name);
   uint16_t hash_val = crc_calculate((const uint8_t*) orb_msg_id->o_name, namelen);
-  hash_val += instance_id;
   return  hash_val;
 }
 
@@ -506,7 +505,7 @@ void do_local_simulation(Simulator::InternetProtocol via) {
 
 
 void publish_uorb_msg(orb_id_t orb_msg_id, int instance_id, const void* buf) {
-  uint16_t hashval = hash_from_msg_id( orb_msg_id, instance_id);
+  uint16_t hashval = hash_from_msg_id( orb_msg_id);
   orb_advert_t advert = _uorb_hash_to_advert[hashval];
 
   int ret = orb_publish_auto(
@@ -565,6 +564,14 @@ void Simulator::recv_loop() {
 
       uint8_t* offset_buf = &_recvbuf[0];
       while (avail_len > 0) {
+        //find the first magic marker
+        uint8_t magic = offset_buf[0];
+        if ( magic != UORB_MAGIC_V1) {
+          offset_buf += 1;
+          avail_len -= 1;
+          continue;
+        }
+
         uint16_t hashval = (offset_buf[0] << 8) + offset_buf[1];
         int instance_id = offset_buf[2];
         uint16_t payload_len = (offset_buf[3] << 8) + offset_buf[4];
@@ -647,6 +654,7 @@ void Simulator::send_loop()
 }
 
 
+
 void send_one_uorb_msg(
     Simulator::InternetProtocol via,
     orb_id_t orb_msg_id,
@@ -666,20 +674,22 @@ void send_one_uorb_msg(
     uint16_t payload_len = orb_msg_id->o_size;
     uint16_t msg_len = UORB_MSG_HEADER_LEN + payload_len;
     //TODO store these in reverse id-to-hash map
-    uint16_t hash_val = hash_from_msg_id(orb_msg_id, instance_id);
+    uint16_t hash_val = hash_from_msg_id(orb_msg_id);
 
 
-//    PX4_WARN("encode %s[%d] (0x%x %d)", orb_msg_id->o_name, instance_id, hash_val, payload_len);
+//    PX4_INFO("encode %s[%d] (0x%x %d)", orb_msg_id->o_name, instance_id, hash_val, payload_len);
     // uorb wrapper header
-    _sendbuf[0] = (hash_val >> 8) & 0xFF;
-    _sendbuf[1] = hash_val & 0xFF;
-    _sendbuf[2] = instance_id;
-    _sendbuf[3] = (payload_len >> 8) & 0xFF;
-    _sendbuf[4] = payload_len & 0xFF;
+    _sendbuf[0] = UORB_MAGIC_V1;
+    _sendbuf[1] = (hash_val >> 8) & 0xFF;
+    _sendbuf[2] = hash_val & 0xFF;
+    _sendbuf[3] = instance_id;
+    _sendbuf[4] = (payload_len >> 8) & 0xFF;
+    _sendbuf[5] = payload_len & 0xFF;
 
+    // magic uint8_t
     // o_name hash uint16_t
     // instance id uint8_t (for multi instance)
-    // o_size (size of payload) uint16_t
+    // o_size (length of payload) uint16_t
     // payload
 
     ssize_t sent_len;
@@ -692,7 +702,7 @@ void send_one_uorb_msg(
     }
 
     if (sent_len > 0) {
-      PX4_DEBUG("sent %s 0x%x %d %d",orb_msg_id->o_name, hash_val, instance_id, payload_len);
+      PX4_INFO("sent %s 0x%x %u %u",orb_msg_id->o_name, hash_val, instance_id, payload_len);
     }
   }
 

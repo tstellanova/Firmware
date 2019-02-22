@@ -181,7 +181,8 @@ sh "$autostart_file"
 
 
 dataman start
-replay tryapplyparams
+#replay tryapplyparams
+echo "Simulator start..."
 simulator start -s -c $simulator_tcp_port
 #simulator start -p -u $simulator_udp_port
 
@@ -190,8 +191,11 @@ tone_alarm start
 # accelsim start
 # barosim start
 # gpssim start
+echo "Sensors start..."
 sensors start
+echo "Commander start..."
 commander start
+echo "Navigator start..."
 navigator start
 
 if param compare WEST_EN 1
@@ -226,6 +230,8 @@ fi
 #
 sh etc/init.d/rc.vehicle_setup
 
+echo "mavlink start..."
+
 # GCS link
 mavlink start -x -u $udp_gcs_port_local -r 4000000
 mavlink stream -r 50 -s POSITION_TARGET_LOCAL_NED -u $udp_gcs_port_local
@@ -245,7 +251,12 @@ mavlink start -x -u $udp_offboard_port_local -r 4000000 -m onboard -o $udp_offbo
 [ -e "$autostart_file".post ] && sh "$autostart_file".post
 
 
+echo "logger start..."
+
 logger start -e -t -b 1000
 
 mavlink boot_complete
-replay trystart
+#replay trystart
+
+echo "rcS done"
+
