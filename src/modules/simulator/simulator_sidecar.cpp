@@ -215,6 +215,7 @@ void Simulator::init()
     _actuator_outputs_sub[i] =  subscribe_to_multi_topic(ORB_ID(actuator_outputs), i, 0);
   }
   _vehicle_status_sub =  subscribe_to_multi_topic(ORB_ID(vehicle_status), 0, 0);
+  _manual_sub =  subscribe_to_multi_topic(ORB_ID(battery_status), 0, 0);
 
 //  subscribe_to_multi_topic(ORB_ID(vehicle_local_position_setpoint), 0, 0);
 //  subscribe_to_multi_topic(ORB_ID(trajectory_setpoint), 0, 0);
@@ -514,7 +515,7 @@ void do_local_simulation() {
     }
   }
 
-  PX4_INFO("do_local_simulation %llu", real_time);
+  //PX4_INFO("do_local_simulation %llu", real_time);
 }
 
 
@@ -557,7 +558,11 @@ void Simulator::recv_loop() {
   fds[0].events = POLLIN;
 
 
+//  do_local_simulation();
+
   PX4_WARN("Wait to recv msgs from partner...");
+
+  ssize_t prefix_byte_count = 0;
 
   while (true) {
     // wait for new messages to arrive on socket
@@ -565,7 +570,7 @@ void Simulator::recv_loop() {
     if (pret == 0) {
       // Timed out.
       //TODO temporary: force publish some attitude values
-      do_local_simulation();
+//      do_local_simulation();
       continue;
     }
 
@@ -575,16 +580,37 @@ void Simulator::recv_loop() {
     }
 
     if (fds[0].revents & POLLIN) {
-      ssize_t avail_len = recvfrom(_dest_sock_fd,  _recvbuf, sizeof(_recvbuf), 0,
+      ssize_t avail_len = recvfrom(_dest_sock_fd,  &_recvbuf[prefix_byte_count], sizeof(_recvbuf) - prefix_byte_count , 0,
                          (struct sockaddr *) &_srcaddr, (socklen_t * ) & _addrlen);
 
+      if ((avail_len > 0) && (prefix_byte_count > 0)) {
+        avail_len += prefix_byte_count;
+        //PX4_INFO("recovered: %ld",prefix_byte_count);
+        prefix_byte_count = 0; //reset
+      }
       uint8_t* offset_buf = &_recvbuf[0];
+      uint32_t magic_search_count = 0;
+      uint32_t msg_search_count = 0;
       while (avail_len > 0) {
         //find the first magic marker
         uint8_t magic = offset_buf[0];
         if ( magic != UORB_MAGIC_V1) {
           offset_buf += 1;
           avail_len -= 1;
+          magic_search_count++;
+          continue;
+        }
+        if (magic_search_count > 0) {
+//          PX4_WARN("magic_search_count: %u",magic_search_count);
+          magic_search_count = 0;
+        }
+
+        //verify we have at least header avail
+        if (avail_len < UORB_MSG_HEADER_LEN) {
+          PX4_INFO("scraps");
+          memcpy(&_recvbuf[0], offset_buf, avail_len);
+          prefix_byte_count = avail_len;
+          avail_len = 0;
           continue;
         }
 
@@ -598,24 +624,33 @@ void Simulator::recv_loop() {
         // o_size uint16_t
         // payload
 
-        //std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
-        //_uorb_tuple_to_orb_id[key];
-
         orb_id_t orb_msg_id = _uorb_hash_to_orb_id[hashval];
         if (nullptr == orb_msg_id) {
-          PX4_INFO("junk hash 0x%x instance %u ", hashval, instance_id);
+          PX4_INFO("junk hash 0x%x count %u ", hashval, msg_search_count);
           offset_buf += 1;
           avail_len -= 1;
+          msg_search_count++;
           continue;
         }
         else {
-          PX4_INFO("rcvd %s %d ", orb_msg_id->o_name, instance_id );
+          msg_search_count = 0;
         }
 
-        publish_uorb_msg(orb_msg_id, instance_id, (const uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN]);
 
-        offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
-        avail_len -= (UORB_MSG_HEADER_LEN + payload_len);
+        if (avail_len > payload_len) {
+          publish_uorb_msg(orb_msg_id, instance_id, (const uint8_t *) &offset_buf[UORB_MSG_HEADER_LEN]);
+          //PX4_INFO("pub %s %d ", orb_msg_id->o_name, instance_id );
+
+          offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
+          avail_len -= (UORB_MSG_HEADER_LEN + payload_len);
+        }
+        else {
+          //PX4_WARN("avail: %ld need: %u", avail_len , payload_len);
+          // move the remaining bytes to the front of the recvbuf, and read socket again
+          memcpy(&_recvbuf[0], offset_buf, avail_len);
+          prefix_byte_count = avail_len;
+          avail_len = 0;
+        }
       }
     }
   }
@@ -649,7 +684,7 @@ void Simulator::send_loop()
   PX4_WARN("Simulator::send_loop");
 
   px4_pollfd_struct_t fds[1] = {};
-  fds[0].fd = _actuator_outputs_sub[0];
+  fds[0].fd = _manual_sub; //TODO switch back to _actuator_outputs_sub[0];
   fds[0].events = POLLIN;
 
   while (true) {
@@ -737,7 +772,7 @@ void Simulator::poll_topics()
     orb_check(it->first,  &updated);
     if (updated) {
       sub_handle_ctx ctx = it->second;
-      send_one_uorb_msg(_ip, std::get<0>(ctx), nullptr, 0, updated, std::get<1>(ctx));
+      send_one_uorb_msg(_ip, std::get<0>(ctx), nullptr, 0, it->first, std::get<1>(ctx));
     }
   }
 
