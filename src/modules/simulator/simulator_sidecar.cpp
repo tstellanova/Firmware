@@ -215,7 +215,7 @@ void Simulator::init()
     _actuator_outputs_sub[i] =  subscribe_to_multi_topic(ORB_ID(actuator_outputs), i, 0);
   }
   _vehicle_status_sub =  subscribe_to_multi_topic(ORB_ID(vehicle_status), 0, 0);
-  _manual_sub =  subscribe_to_multi_topic(ORB_ID(battery_status), 0, 0);
+//  _manual_sub =  subscribe_to_multi_topic(ORB_ID(battery_status), 0, 0);
 
 //  subscribe_to_multi_topic(ORB_ID(vehicle_local_position_setpoint), 0, 0);
 //  subscribe_to_multi_topic(ORB_ID(trajectory_setpoint), 0, 0);
@@ -509,7 +509,7 @@ void do_local_simulation() {
       _last_fast_cadence_send = local_elapsed_usec;
 
 //      if ((local_elapsed_usec - _last_slow_cadence_send) > 1000000) {
-//        send_slow_cadence_fake_sensors(via);
+//        send_slow_cadence_fake_sensors();
 //        _last_slow_cadence_send = local_elapsed_usec;
 //      }
     }
@@ -558,11 +558,11 @@ void Simulator::recv_loop() {
   fds[0].events = POLLIN;
 
 
-//  do_local_simulation();
-
   PX4_WARN("Wait to recv msgs from partner...");
 
   ssize_t prefix_byte_count = 0;
+  int gyro_sub_handle =  orb_subscribe_multi(ORB_ID(sensor_gyro), 0);
+
 
   while (true) {
     // wait for new messages to arrive on socket
@@ -570,7 +570,7 @@ void Simulator::recv_loop() {
     if (pret == 0) {
       // Timed out.
       //TODO temporary: force publish some attitude values
-//      do_local_simulation();
+      //do_local_simulation();
       continue;
     }
 
@@ -607,7 +607,7 @@ void Simulator::recv_loop() {
 
         //verify we have at least header avail
         if (avail_len < UORB_MSG_HEADER_LEN) {
-          PX4_INFO("scraps");
+          //PX4_INFO("scraps");
           memcpy(&_recvbuf[0], offset_buf, avail_len);
           prefix_byte_count = avail_len;
           avail_len = 0;
@@ -640,6 +640,12 @@ void Simulator::recv_loop() {
         if (avail_len > payload_len) {
           publish_uorb_msg(orb_msg_id, instance_id, (const uint8_t *) &offset_buf[UORB_MSG_HEADER_LEN]);
           //PX4_INFO("pub %s %d ", orb_msg_id->o_name, instance_id );
+          // slurp the updated simulated time from a known high-cadence sensor
+          if (orb_msg_id == ORB_ID(sensor_gyro)) {
+            sensor_gyro_s gyro_report = {};
+            orb_copy(orb_msg_id, gyro_sub_handle, (void *) &gyro_report);
+            update_px4_clock(gyro_report.timestamp);
+          }
 
           offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
           avail_len -= (UORB_MSG_HEADER_LEN + payload_len);
@@ -684,7 +690,7 @@ void Simulator::send_loop()
   PX4_WARN("Simulator::send_loop");
 
   px4_pollfd_struct_t fds[1] = {};
-  fds[0].fd = _manual_sub; //TODO switch back to _actuator_outputs_sub[0];
+  fds[0].fd = _actuator_outputs_sub[0];
   fds[0].events = POLLIN;
 
   while (true) {
