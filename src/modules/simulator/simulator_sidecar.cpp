@@ -182,8 +182,7 @@ void init_simulated_clock() {
   set_simulated_clock(start_time);
   update_px4_clock(start_time);
 
-  PX4_WARN("Simulator::init with %llu %llu", start_time, hrt_absolute_time());
-
+  PX4_WARN("init_simulated_clock %llu %llu", start_time, hrt_absolute_time());
 }
 
 void Simulator::init()
@@ -203,9 +202,6 @@ void Simulator::init()
   }
 
   PX4_INFO("done with topic map");
-
-  //TODO temp -- normally we'd update the clock based on eg HIL_SENSOR
-  init_simulated_clock();
 
   _fd = -1;
   _dest_sock_fd = -1;
@@ -642,9 +638,14 @@ void Simulator::recv_loop() {
           //PX4_INFO("pub %s %d ", orb_msg_id->o_name, instance_id );
           // slurp the updated simulated time from a known high-cadence sensor
           if (orb_msg_id == ORB_ID(sensor_gyro)) {
-            sensor_gyro_s gyro_report = {};
-            orb_copy(orb_msg_id, gyro_sub_handle, (void *) &gyro_report);
-            update_px4_clock(gyro_report.timestamp);
+            bool updated = false;
+            orb_check(gyro_sub_handle,&updated);
+            if (updated) {
+              sensor_gyro_s gyro_report = {};
+              orb_copy(orb_msg_id, gyro_sub_handle, (void *) &gyro_report);
+              update_px4_clock(gyro_report.timestamp);
+              PX4_INFO("gyro device_id: %u timestamp: %llu", gyro_report.device_id, gyro_report.timestamp);
+            }
           }
 
           offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
