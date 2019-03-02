@@ -101,7 +101,12 @@ __EXPORT extern void	abstime_to_ts(struct timespec *ts, hrt_abstime abstime);
  */
 static inline hrt_abstime hrt_elapsed_time(const hrt_abstime *then)
 {
-	return hrt_absolute_time() - *then;
+	int64_t diff = hrt_absolute_time() - *then;
+//	if (diff < 0) {
+//		PX4_WARN("hrt_elapsed_time < 0");
+//		diff = 0;
+//	}
+	return (hrt_abstime)diff;
 }
 
 /**

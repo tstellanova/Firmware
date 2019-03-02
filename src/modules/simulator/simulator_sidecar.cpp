@@ -32,6 +32,8 @@
 #include <uORB/topics/vehicle_local_position_setpoint.h>
 #include <uORB/topics/system_power.h>
 #include <uORB/topics/battery_status.h>
+#include <uORB/topics/battery_status.h>
+#include <uORB/topics/timesync_status.h>
 #include <uORB/topics/vehicle_gps_position.h>
 #include <uORB/topics/vehicle_global_position.h>
 
@@ -100,6 +102,7 @@ void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadat
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval);
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id);
 void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf);
+void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, const uint8_t* buf);
 
 
 /// Use unix time to simulate actual time
@@ -110,11 +113,11 @@ unsigned long get_os_clock_usec() {
   return time_in_micros;
 }
 
-void update_px4_clock(unsigned long usec) {
+void update_px4_clock(uint64_t usec) {
+  //PX4_WARN("update_px4_clock: %lu", usec);
   struct timespec ts = {};
   abstime_to_ts(&ts, usec);
   px4_clock_settime(CLOCK_MONOTONIC, &ts);
-  //TODO use abstime_to_ts instead?
 }
 
 static hrt_abstime _simulated_clock_usec = 0;
@@ -150,13 +153,11 @@ float altitude_to_baro_pressure(float alt)  {
 }
 
 
-
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id) {
   int namelen = strlen(orb_msg_id->o_name);
   uint16_t hash_val = crc_calculate((const uint8_t*) orb_msg_id->o_name, namelen);
   return  hash_val;
 }
-
 
 
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval) {
@@ -176,14 +177,14 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval)
   return handle;
 }
 
-void init_simulated_clock() {
-  hrt_abstime start_time = get_os_clock_usec();
-  start_time = (start_time / 1000) * 1000;
-  set_simulated_clock(start_time);
-  update_px4_clock(start_time);
-
-  PX4_WARN("init_simulated_clock %llu %llu", start_time, hrt_absolute_time());
-}
+//void init_simulated_clock() {
+//  hrt_abstime start_time = get_os_clock_usec();
+//  start_time = (start_time / 1000) * 1000;
+//  set_simulated_clock(start_time);
+//  update_px4_clock(start_time);
+//
+//  PX4_WARN("init_simulated_clock %llu %llu", start_time, hrt_absolute_time());
+//}
 
 void Simulator::init()
 {
@@ -211,7 +212,7 @@ void Simulator::init()
     _actuator_outputs_sub[i] =  subscribe_to_multi_topic(ORB_ID(actuator_outputs), i, 0);
   }
   _vehicle_status_sub =  subscribe_to_multi_topic(ORB_ID(vehicle_status), 0, 0);
-//  _manual_sub =  subscribe_to_multi_topic(ORB_ID(battery_status), 0, 0);
+//  _manual_sub =  subscribe_to_multi_topic(ORB_ID(timesync_status), 0, 0);
 
 //  subscribe_to_multi_topic(ORB_ID(vehicle_local_position_setpoint), 0, 0);
 //  subscribe_to_multi_topic(ORB_ID(trajectory_setpoint), 0, 0);
@@ -409,7 +410,7 @@ void publish_local_fake_fast_cadence_sensors() {
 
 }
 
-void send_fake_gps_msgs(Simulator::InternetProtocol via) {
+void send_fake_gps_msgs() {
   int32_t common_alt = (int32_t)(1E3* get_noisy_value(HOME_ALT, 0.1));
   unsigned long common_time =  hrt_absolute_time();
 
@@ -431,24 +432,12 @@ void send_fake_gps_msgs(Simulator::InternetProtocol via) {
       .fix_type = 3,
       .satellites_used = 10,
   };
-  send_one_uorb_msg(via, ORB_ID(vehicle_gps_position), (uint8_t*)&gps_report, sizeof(gps_report), 0, 0);
-
-//  vehicle_global_position_s hil_global_pos = {
-//      .timestamp = gps_report.timestamp,
-//      .lat = gps_report.lat / ((double)1e7),
-//      .lon = gps_report.lon / ((double)1e7),
-//      .alt = gps_report.alt / 1000.0f,
-//      .vel_n = gps_report.vel_n_m_s / 100.0f,
-//      .vel_e = gps_report.vel_e_m_s / 100.0f,
-//      .vel_d = gps_report.vel_d_m_s / 100.0f,
-//      .eph = gps_report.eph,
-//      .epv = gps_report.epv,
-//  };
-//  send_one_uorb_msg(via, ORB_ID(vehicle_global_position), (uint8_t*)&hil_global_pos, sizeof(hil_global_pos), 0, 0);
+  publish_uorb_msg(ORB_ID(vehicle_gps_position),0, (uint8_t*) &gps_report);
+//  send_one_uorb_msg(via, ORB_ID(vehicle_gps_position), (uint8_t*)&gps_report, sizeof(gps_report), 0, 0);
 
 }
 
-void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
+void publish_slow_cadence_fake_sensors() {
 
   unsigned long common_time = hrt_absolute_time();
 
@@ -467,7 +456,7 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 //    .hipower_5v_oc = 0
 //  };
 //  send_one_uorb_msg(via, ORB_ID(system_power), (uint8_t*)&system_power, sizeof(system_power), 0, 0);
-
+//  publish_uorb_msg(ORB_ID(sensor_baro),0, (const void*) &baro_report);
 
   battery_status_s batt_report =  {
     .timestamp =  common_time,
@@ -477,7 +466,8 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
     .system_source = true,
 //    .warning = battery_status_s::BATTERY_WARNING_CRITICAL,
   };
-  send_one_uorb_msg(via, ORB_ID(battery_status), (uint8_t*)&batt_report, sizeof(batt_report), 0, 0);
+  publish_uorb_msg(ORB_ID(battery_status),0, (const void*) &batt_report);
+//  send_one_uorb_msg(via, ORB_ID(battery_status), (uint8_t*)&batt_report, sizeof(batt_report), 0, 0);
 
 }
 
@@ -487,7 +477,7 @@ void send_slow_cadence_fake_sensors(Simulator::InternetProtocol via) {
 void do_local_simulation() {
   static hrt_abstime _last_realtime_clock = 0;
   static hrt_abstime _last_fast_cadence_send = 0;
-//  static hrt_abstime _last_slow_cadence_send = 0;
+  static hrt_abstime _last_slow_cadence_send = 0;
 
   hrt_abstime real_time = get_os_clock_usec();
   hrt_abstime delta_time = (real_time - _last_realtime_clock);
@@ -504,10 +494,10 @@ void do_local_simulation() {
       publish_local_fake_fast_cadence_sensors();
       _last_fast_cadence_send = local_elapsed_usec;
 
-//      if ((local_elapsed_usec - _last_slow_cadence_send) > 1000000) {
-//        send_slow_cadence_fake_sensors();
-//        _last_slow_cadence_send = local_elapsed_usec;
-//      }
+      if ((local_elapsed_usec - _last_slow_cadence_send) > 1000000) {
+        publish_slow_cadence_fake_sensors();
+        _last_slow_cadence_send = local_elapsed_usec;
+      }
     }
   }
 
@@ -517,7 +507,35 @@ void do_local_simulation() {
 
 
 void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf) {
-  uint16_t hashval = hash_from_msg_id( orb_msg_id);
+  uint16_t hashval = hash_from_msg_id(orb_msg_id);
+  std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
+  orb_advert_t advert = _uorb_hash_to_advert[key];
+
+  int up_instance_id = instance_id;
+
+  int ret = orb_publish_auto(
+      orb_msg_id,
+      &advert,
+      buf,
+      &up_instance_id,
+      ORB_PRIO_HIGH);
+
+  if (_uorb_hash_to_advert[key] != advert) {
+    _uorb_hash_to_advert[key] = advert;
+    PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[key]);
+  }
+
+  if (OK != ret) {
+    PX4_ERR("publish err: %d", ret);
+  }
+  else {
+    PX4_DEBUG("pub: %s [%d]", orb_msg_id->o_name, instance_id);
+  }
+}
+
+
+void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, const uint8_t* buf) {
+  uint16_t hashval = hash_from_msg_id(orb_msg_id);
   std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
   orb_advert_t advert = _uorb_hash_to_advert[key];
 
@@ -545,6 +563,7 @@ void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf)
 
 
 
+
 void Simulator::recv_loop() {
 
   struct pollfd fds[2];
@@ -557,16 +576,17 @@ void Simulator::recv_loop() {
   PX4_WARN("Wait to recv msgs from partner...");
 
   ssize_t prefix_byte_count = 0;
-  int gyro_sub_handle =  orb_subscribe_multi(ORB_ID(sensor_gyro), 0);
+  int timewatch_sub =  orb_subscribe_multi(ORB_ID(timesync_status), 0);
 
 
   while (true) {
     // wait for new messages to arrive on socket
     int pret = ::poll(&fds[0], fd_count, 250);
+
     if (pret == 0) {
       // Timed out.
       //TODO temporary: force publish some attitude values
-      //do_local_simulation();
+//      do_local_simulation();
       continue;
     }
 
@@ -634,17 +654,21 @@ void Simulator::recv_loop() {
 
 
         if (avail_len > payload_len) {
-          publish_uorb_msg(orb_msg_id, instance_id, (const uint8_t *) &offset_buf[UORB_MSG_HEADER_LEN]);
+          //TODO There's a problem here in that the struct size is word-aligned, but input octet buf is not
+
+          const uint8_t* pBuf = (const uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN];
+          publish_uorb_msg_from_bytes(orb_msg_id, instance_id, pBuf);
           //PX4_INFO("pub %s %d ", orb_msg_id->o_name, instance_id );
           // slurp the updated simulated time from a known high-cadence sensor
-          if (orb_msg_id == ORB_ID(sensor_gyro)) {
+          if (orb_msg_id == ORB_ID(timesync_status)) {
             bool updated = false;
-            orb_check(gyro_sub_handle,&updated);
+            orb_check(timewatch_sub,&updated);
             if (updated) {
-              sensor_gyro_s gyro_report = {};
-              orb_copy(orb_msg_id, gyro_sub_handle, (void *) &gyro_report);
-              update_px4_clock(gyro_report.timestamp);
-              PX4_INFO("gyro device_id: %u timestamp: %llu", gyro_report.device_id, gyro_report.timestamp);
+              timesync_status_s timesync_report = {};
+              orb_copy(orb_msg_id, timewatch_sub, (void *) &timesync_report);
+              //PX4_INFO("time: %llx", timesync_report.remote_timestamp);
+              update_px4_clock(timesync_report.remote_timestamp);
+              //TODO PX4_INFO("req %lu got %u", sizeof(gyro_report), payload_len);
             }
           }
 

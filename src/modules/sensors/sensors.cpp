@@ -690,6 +690,9 @@ Sensors::run()
 				_voted_sensors_update.calc_mag_inconsistency(preflt);
 				orb_publish(ORB_ID(sensor_preflight), _sensor_preflight, &preflt);
 			}
+		} else {
+			//no position lock yet
+			// PX4_WARN("no raw timestamp");
 		}
 
 		/* keep adding sensors as long as we are not armed,

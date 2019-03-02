@@ -181,7 +181,7 @@ sh "$autostart_file"
 
 
 dataman start
-#replay tryapplyparams
+replay tryapplyparams
 echo "Simulator start..."
 simulator start -s -c $simulator_tcp_port
 #simulator start -p -u $simulator_udp_port
