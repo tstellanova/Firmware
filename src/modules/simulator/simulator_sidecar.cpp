@@ -69,7 +69,7 @@ static std::normal_distribution<float> _normal_distribution(0.0f, 3.0f);
 static std::default_random_engine _noise_gen;
 
 
-const int UORB_MSG_HEADER_LEN = 6;
+const int UORB_MSG_HEADER_LEN = 14;
 const uint8_t UORB_MAGIC_V1 = 0xAA;
 
 
@@ -114,6 +114,10 @@ unsigned long get_os_clock_usec() {
 }
 
 void update_px4_clock(uint64_t usec) {
+  const uint64_t cur_total_time = hrt_absolute_time() + hrt_absolute_time_offset();
+  if (usec < cur_total_time) {
+    PX4_WARN("regress clock: %lld", usec - cur_total_time);
+  }
   //PX4_WARN("update_px4_clock: %lu", usec);
   struct timespec ts = {};
   abstime_to_ts(&ts, usec);
@@ -133,6 +137,9 @@ hrt_abstime get_simulated_clock_usec() {
 void increment_simulation_clock(uint32_t usec) {
   _simulated_clock_usec += usec;
 }
+
+
+
 
 const double STD_PRESS = 101325.0;  // static pressure at sea level (Pa)
 const double  STD_TEMP = 288.15;    // standard temperature at sea level (K)
@@ -431,7 +438,6 @@ void send_fake_gps_msgs() {
       .satellites_used = 10,
   };
   publish_uorb_msg(ORB_ID(vehicle_gps_position),0, (uint8_t*) &gps_report);
-//  send_one_uorb_msg(via, ORB_ID(vehicle_gps_position), (uint8_t*)&gps_report, sizeof(gps_report), 0, 0);
 
 }
 
@@ -453,7 +459,6 @@ void publish_slow_cadence_fake_sensors() {
 //    .periph_5v_oc = 0,
 //    .hipower_5v_oc = 0
 //  };
-//  send_one_uorb_msg(via, ORB_ID(system_power), (uint8_t*)&system_power, sizeof(system_power), 0, 0);
 //  publish_uorb_msg(ORB_ID(sensor_baro),0, (const void*) &baro_report);
 
   battery_status_s batt_report =  {
@@ -465,7 +470,6 @@ void publish_slow_cadence_fake_sensors() {
 //    .warning = battery_status_s::BATTERY_WARNING_CRITICAL,
   };
   publish_uorb_msg(ORB_ID(battery_status),0, (const void*) &batt_report);
-//  send_one_uorb_msg(via, ORB_ID(battery_status), (uint8_t*)&batt_report, sizeof(batt_report), 0, 0);
 
 }
 
@@ -520,7 +524,7 @@ void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf)
 
   if (_uorb_hash_to_advert[key] != advert) {
     _uorb_hash_to_advert[key] = advert;
-    PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[key]);
+    //PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[key]);
   }
 
   if (OK != ret) {
@@ -548,7 +552,7 @@ void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, const
 
   if (_uorb_hash_to_advert[key] != advert) {
     _uorb_hash_to_advert[key] = advert;
-    PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[key]);
+    //PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[key]);
   }
 
   if (OK != ret) {
@@ -574,7 +578,7 @@ void Simulator::recv_loop() {
   PX4_WARN("Wait to recv msgs from partner...");
 
   ssize_t prefix_byte_count = 0;
-  int timewatch_sub =  orb_subscribe_multi(ORB_ID(timesync_status), 0);
+  //int timewatch_sub =  orb_subscribe_multi(ORB_ID(timesync_status), 0);
 
 
   while (true) {
@@ -629,11 +633,22 @@ void Simulator::recv_loop() {
         }
 
         uint16_t hashval = (offset_buf[1] << 8) + offset_buf[2];
-        uint8_t instance_id = offset_buf[3];
-        uint16_t payload_len = (offset_buf[4] << 8) + offset_buf[5];
+        uint64_t timestamp = ((uint64_t)offset_buf[3] << 56)
+            + ((uint64_t)offset_buf[4] << 48)
+            + ((uint64_t)offset_buf[5] << 40)
+            + ((uint64_t)offset_buf[6] << 32)
+            + ((uint64_t)offset_buf[7] << 24)
+            + ((uint64_t)offset_buf[8] << 16)
+            + ((uint64_t)offset_buf[9] << 8)
+            + (uint64_t)offset_buf[10] ;
+
+
+        uint8_t instance_id = offset_buf[11];
+        uint16_t payload_len = (offset_buf[12] << 8) + offset_buf[13];
 
         // uint8_t magic
         // o_name hash uint16_t
+        // timestamp uint64_t
         // instance id uint8_t
         // o_size uint16_t
         // payload
@@ -652,23 +667,26 @@ void Simulator::recv_loop() {
 
 
         if (avail_len > payload_len) {
-          //TODO There's a problem here in that the struct size is word-aligned, but input octet buf is not
+          //update the px4 clock on every remote uorb msg received
+          update_px4_clock(timestamp);
 
+          //TODO There's a problem here in that the struct size is word-aligned, but input octet buf is not
           const uint8_t* pBuf = (const uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN];
           publish_uorb_msg_from_bytes(orb_msg_id, instance_id, pBuf);
           //PX4_INFO("pub %s %d ", orb_msg_id->o_name, instance_id );
-          // slurp the updated simulated time from a known high-cadence sensor
-          if (orb_msg_id == ORB_ID(timesync_status)) {
-            bool updated = false;
-            orb_check(timewatch_sub,&updated);
-            if (updated) {
-              timesync_status_s timesync_report = {};
-              orb_copy(orb_msg_id, timewatch_sub, (void *) &timesync_report);
-              //PX4_INFO("time: %llx", timesync_report.remote_timestamp);
-              update_px4_clock(timesync_report.remote_timestamp);
-              //TODO PX4_INFO("req %lu got %u", sizeof(gyro_report), payload_len);
-            }
-          }
+
+//           slurp the updated simulated time from a known high-cadence sensor
+//          if (orb_msg_id == ORB_ID(timesync_status)) {
+//            bool updated = false;
+//            orb_check(timewatch_sub,&updated);
+//            if (updated) {
+//              timesync_status_s timesync_report = {};
+//              orb_copy(orb_msg_id, timewatch_sub, (void *) &timesync_report);
+//              //PX4_INFO("time: %llx", timesync_report.remote_timestamp);
+//              update_px4_clock(timesync_report.remote_timestamp);
+//              //TODO PX4_INFO("req %lu got %u", sizeof(gyro_report), payload_len);
+//            }
+//          }
 
           offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
           avail_len -= (UORB_MSG_HEADER_LEN + payload_len);
@@ -747,27 +765,40 @@ void send_one_uorb_msg(
     uint8_t instance_id) {
   //only bother processing uorb messages if we have a connected partner
   if (_dest_sock_fd > 0) {
+    void* dest_payload_buf = (void*)&_sendbuf[UORB_MSG_HEADER_LEN];
     if (nullptr == src) {
-      orb_copy(orb_msg_id, handle, (void *) &_sendbuf[UORB_MSG_HEADER_LEN]);
+      orb_copy(orb_msg_id, handle, dest_payload_buf);
     }
     else {
-      memcpy((void *) &_sendbuf[UORB_MSG_HEADER_LEN], src, len);
+      memcpy(dest_payload_buf, src, len);
     }
 
+    uint64_t timestamp = hrt_total_time();
     uint16_t payload_len = orb_msg_id->o_size;
     uint16_t msg_len = UORB_MSG_HEADER_LEN + payload_len;
-    //TODO store these in reverse id-to-hash map
+    //TODO store these in reverse id-to-hash map ?
     uint16_t hash_val = hash_from_msg_id(orb_msg_id);
 
 
 //    PX4_INFO("encode %s[%d] (0x%x %d)", orb_msg_id->o_name, instance_id, hash_val, payload_len);
     // uorb wrapper header
     _sendbuf[0] = UORB_MAGIC_V1;
-    _sendbuf[1] = (hash_val >> 8) & 0xFF;
-    _sendbuf[2] = hash_val & 0xFF;
-    _sendbuf[3] = instance_id;
-    _sendbuf[4] = (payload_len >> 8) & 0xFF;
-    _sendbuf[5] = payload_len & 0xFF;
+    _sendbuf[1] = (uint8_t)((hash_val >> 8) & 0xFF);
+    _sendbuf[2] =  (uint8_t)(hash_val & 0xFF);
+
+    //TODO send true timestamp as BigEndian uint64_t
+    _sendbuf[3] = (uint8_t)((timestamp >> 56) & 0xFF);
+    _sendbuf[4] = (uint8_t)((timestamp >> 48) & 0xFF);
+    _sendbuf[5] = (uint8_t)((timestamp >> 40) & 0xFF);
+    _sendbuf[6] = (uint8_t)((timestamp >> 32) & 0xFF);
+    _sendbuf[7] = (uint8_t)((timestamp >> 24) & 0xFF);
+    _sendbuf[8] = (uint8_t)((timestamp >> 16) & 0xFF);
+    _sendbuf[9] = (uint8_t)((timestamp >> 8) & 0xFF);
+    _sendbuf[10] = (uint8_t)(timestamp & 0xFF);
+
+    _sendbuf[11] = instance_id;
+    _sendbuf[12] = (uint8_t)((payload_len >> 8) & 0xFF);
+    _sendbuf[13] = (uint8_t)(payload_len & 0xFF);
 
     // magic uint8_t
     // o_name hash uint16_t
