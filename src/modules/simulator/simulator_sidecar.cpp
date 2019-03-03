@@ -773,7 +773,7 @@ void send_one_uorb_msg(
       memcpy(dest_payload_buf, src, len);
     }
 
-    uint64_t timestamp = hrt_total_time();
+    uint64_t timestamp =  hrt_absolute_time() + hrt_absolute_time_offset();
     uint16_t payload_len = orb_msg_id->o_size;
     uint16_t msg_len = UORB_MSG_HEADER_LEN + payload_len;
     //TODO store these in reverse id-to-hash map ?
@@ -802,6 +802,7 @@ void send_one_uorb_msg(
 
     // magic uint8_t
     // o_name hash uint16_t
+    // timestamp uint64_t
     // instance id uint8_t (for multi instance)
     // o_size (length of payload) uint16_t
     // payload
@@ -843,6 +844,7 @@ void Simulator::poll_topics()
 void Simulator::runloop() {
 
   if (init_connection()) {
+    update_px4_clock(0); //
     start_sender();
     recv_loop();
   }
