@@ -102,7 +102,7 @@ void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadat
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval);
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id);
 void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf);
-void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, const uint8_t* buf);
+void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, uint8_t* buf);
 
 
 /// Use unix time to simulate actual time
@@ -536,12 +536,19 @@ void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf)
 }
 
 
-void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, const uint8_t* buf) {
+void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, uint8_t* buf) {
   uint16_t hashval = hash_from_msg_id(orb_msg_id);
   std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
   orb_advert_t advert = _uorb_hash_to_advert[key];
 
   int up_instance_id = instance_id;
+
+  // Fixup the timestamp to match the current time.
+  // We assume that, thanks to stable sort order of msg fields,
+  // the first 8 bytes of every uORB message is the timestamp,
+  // and can be overwritten.
+  uint64_t local_timestamp = hrt_absolute_time();
+  memcpy(buf,&local_timestamp,sizeof(uint64_t)); //TODO check byte order matches
 
   int ret = orb_publish_auto(
       orb_msg_id,
@@ -575,11 +582,7 @@ void Simulator::recv_loop() {
   fds[0].events = POLLIN;
 
 
-  PX4_WARN("Wait to recv msgs from partner...");
-
   ssize_t prefix_byte_count = 0;
-  //int timewatch_sub =  orb_subscribe_multi(ORB_ID(timesync_status), 0);
-
 
   while (true) {
     // wait for new messages to arrive on socket
@@ -665,15 +668,12 @@ void Simulator::recv_loop() {
           msg_search_count = 0;
         }
 
-
         if (avail_len > payload_len) {
           //update the px4 clock on every remote uorb msg received
-          if (orb_msg_id == ORB_ID(timesync_status)) {
-            update_px4_clock(timestamp);
-          }
+          update_px4_clock(timestamp);
 
           //TODO There's a problem here in that the struct size is word-aligned, but input octet buf is not
-          const uint8_t* pBuf = (const uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN];
+          uint8_t* pBuf = (uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN];
           publish_uorb_msg_from_bytes(orb_msg_id, instance_id, pBuf);
 
           offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
