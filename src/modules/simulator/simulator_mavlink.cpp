@@ -64,6 +64,7 @@ static int openUart(const char *uart_name, int baud);
 #endif
 
 static int _fd;
+static int _server_fd;
 static unsigned char _buf[2048];
 static sockaddr_in _srcaddr;
 static unsigned _addrlen = sizeof(_srcaddr);
@@ -673,6 +674,7 @@ void Simulator::poll_for_MAVLink_messages(bool publish)
 #endif
 
 	struct sockaddr_in _myaddr {};
+	struct sockaddr_in _cli_addr {};
 	_myaddr.sin_family = AF_INET;
 	_myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	_myaddr.sin_port = htons(_port);
@@ -693,7 +695,7 @@ void Simulator::poll_for_MAVLink_messages(bool publish)
 
 		while (true) {
 			// Once we receive something, we're most probably good and can carry on.
-			int len = ::recvfrom(_fd, _buf, sizeof(_buf), 0,
+			size_t len = ::recvfrom(_fd, _buf, sizeof(_buf), 0,
 					     (struct sockaddr *)&_srcaddr, (socklen_t *)&_addrlen);
 
 			if (len > 0) {
@@ -711,27 +713,29 @@ void Simulator::poll_for_MAVLink_messages(bool publish)
 		PX4_INFO("Waiting for simulator to connect on TCP port %u", _port);
 
 		while (true) {
-			if ((_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+			if ((_server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 				PX4_ERR("Creating TCP socket failed: %s", strerror(errno));
 				return;
 			}
 
-			int yes = 1;
-			int ret = setsockopt(_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &yes, sizeof(int));
-
-			if (ret != 0) {
-				PX4_ERR("setsockopt failed: %s", strerror(errno));
+			if (bind(_server_fd, (struct sockaddr *)&_myaddr, sizeof(_myaddr)) < 0) { 
+				PX4_ERR("bind for TCP port %i failed (%i)", _port, errno); 
+				return;
 			}
+			
+			listen(_server_fd, 5);
 
-			socklen_t myaddr_len = sizeof(_myaddr);
-			ret = connect(_fd, (struct sockaddr *)&_myaddr, myaddr_len);
+			PX4_INFO("Accepting on TCP port %u", _port);
+			socklen_t cli_addr_len= sizeof(_cli_addr);
+			_fd = accept(_server_fd, (struct sockaddr *)&_cli_addr, &cli_addr_len);
 
-			if (ret == 0) {
-				break;
-
-			} else {
-				::close(_fd);
-				system_sleep(1);
+			if (_fd < 0) {
+				PX4_ERR("error on accept: %d", _fd);
+				close(_server_fd);
+				system_sleep(10);
+			}
+			else {
+			  break;
 			}
 		}
 
