@@ -272,7 +272,7 @@ private:
 	}
 
 	// class methods
-	void initialize_sensor_data();
+//	void initialize_sensor_data();
 
 	int publish_sensor_topics(mavlink_hil_sensor_t *imu);
 	int publish_flow_topic(mavlink_hil_optical_flow_t *flow);
@@ -338,7 +338,7 @@ private:
 
 	void parameters_update(bool force);
 	void poll_topics();
-	void poll_for_MAVLink_messages(bool publish);
+//	void poll_for_MAVLink_messages(bool publish);
 	void request_hil_state_quaternion();
 	void send();
 	void send_controls();
@@ -346,6 +346,16 @@ private:
 	void send_mavlink_message(const mavlink_message_t &aMsg);
 	void update_sensors(mavlink_hil_sensor_t *imu);
 	void update_gps(mavlink_hil_gps_t *gps_sim);
+
+	void init();
+	bool init_connection();
+
+	void start_sender();
+	void runloop();
+
+	void send_loop();
+	void recv_loop();
+
 
 	static void *sending_trampoline(void *);
 

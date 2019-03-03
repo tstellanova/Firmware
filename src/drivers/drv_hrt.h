@@ -97,11 +97,16 @@ __EXPORT extern void	abstime_to_ts(struct timespec *ts, hrt_abstime abstime);
  * Compute the delta between a timestamp taken in the past
  * and now.
  *
- * This function is not interrupt save.
+ * This function is not interrupt safe.
  */
 static inline hrt_abstime hrt_elapsed_time(const hrt_abstime *then)
 {
-	return hrt_absolute_time() - *then;
+	int64_t diff = hrt_absolute_time() - *then;
+	if (diff < 0) {
+		//TODO this sucks
+		diff = 0;
+	}
+	return (hrt_abstime)diff;
 }
 
 /**
