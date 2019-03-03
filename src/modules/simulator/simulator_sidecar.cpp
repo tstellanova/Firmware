@@ -668,25 +668,13 @@ void Simulator::recv_loop() {
 
         if (avail_len > payload_len) {
           //update the px4 clock on every remote uorb msg received
-          update_px4_clock(timestamp);
+          if (orb_msg_id == ORB_ID(timesync_status)) {
+            update_px4_clock(timestamp);
+          }
 
           //TODO There's a problem here in that the struct size is word-aligned, but input octet buf is not
           const uint8_t* pBuf = (const uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN];
           publish_uorb_msg_from_bytes(orb_msg_id, instance_id, pBuf);
-          //PX4_INFO("pub %s %d ", orb_msg_id->o_name, instance_id );
-
-//           slurp the updated simulated time from a known high-cadence sensor
-//          if (orb_msg_id == ORB_ID(timesync_status)) {
-//            bool updated = false;
-//            orb_check(timewatch_sub,&updated);
-//            if (updated) {
-//              timesync_status_s timesync_report = {};
-//              orb_copy(orb_msg_id, timewatch_sub, (void *) &timesync_report);
-//              //PX4_INFO("time: %llx", timesync_report.remote_timestamp);
-//              update_px4_clock(timesync_report.remote_timestamp);
-//              //TODO PX4_INFO("req %lu got %u", sizeof(gyro_report), payload_len);
-//            }
-//          }
 
           offset_buf += (UORB_MSG_HEADER_LEN + payload_len);
           avail_len -= (UORB_MSG_HEADER_LEN + payload_len);
@@ -844,7 +832,6 @@ void Simulator::poll_topics()
 void Simulator::runloop() {
 
   if (init_connection()) {
-    update_px4_clock(0); //
     start_sender();
     recv_loop();
   }
