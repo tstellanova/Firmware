@@ -114,11 +114,6 @@ unsigned long get_os_clock_usec() {
 }
 
 void update_px4_clock(uint64_t usec) {
-  const uint64_t cur_total_time = hrt_absolute_time() + hrt_absolute_time_offset();
-  if (usec < cur_total_time) {
-    PX4_WARN("regress clock: %lld", usec - cur_total_time);
-  }
-  //PX4_WARN("update_px4_clock: %lu", usec);
   struct timespec ts = {};
   abstime_to_ts(&ts, usec);
   px4_clock_settime(CLOCK_MONOTONIC, &ts);
@@ -543,13 +538,6 @@ void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, uint8
 
   int up_instance_id = instance_id;
 
-  // Fixup the timestamp to match the current time.
-  // We assume that, thanks to stable sort order of msg fields,
-  // the first 8 bytes of every uORB message is the timestamp,
-  // and can be overwritten.
-  uint64_t local_timestamp = hrt_absolute_time();
-  memcpy(buf,&local_timestamp,sizeof(uint64_t)); //TODO check byte order matches
-
   int ret = orb_publish_auto(
       orb_msg_id,
       &advert,
@@ -583,6 +571,7 @@ void Simulator::recv_loop() {
 
 
   ssize_t prefix_byte_count = 0;
+  uint64_t abstime_offset = 0;
 
   while (true) {
     // wait for new messages to arrive on socket
@@ -670,7 +659,10 @@ void Simulator::recv_loop() {
 
         if (avail_len > payload_len) {
           //update the px4 clock on every remote uorb msg received
-          update_px4_clock(timestamp);
+          update_px4_clock(timestamp + abstime_offset);
+          if (0 == abstime_offset) {
+            abstime_offset = timestamp;
+          }
 
           //TODO There's a problem here in that the struct size is word-aligned, but input octet buf is not
           uint8_t* pBuf = (uint8_t*) &offset_buf[UORB_MSG_HEADER_LEN];
