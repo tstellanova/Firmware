@@ -64,36 +64,8 @@ typedef std::tuple<orb_id_t,uint8_t> sub_handle_ctx;
 static std::map<int, sub_handle_ctx> _uorb_sub_to_multi_orb_id;
 
 
-
-static std::normal_distribution<float> _normal_distribution(0.0f, 3.0f);
-static std::default_random_engine _noise_gen;
-
-
 const int UORB_MSG_HEADER_LEN = 14;
 const uint8_t UORB_MAGIC_V1 = 0xAA;
-
-
-/// Some guesses as to accuracy of a fake accelerometer
-const float ACCEL_ABS_ERR = 0.05f;
-const float GYRO_ABS_ERR = 0.01f;
-const float MAG_ABS_ERR  = 0.005f;
-const float GPS_ABS_ERR = 1e-6f;
-
-/// Fake home coordinates
-const float HOME_LAT = 37.8f;
-const float HOME_LON = -122.2f;
-const float HOME_ALT = 500.0f;
-const float HOME_MAG[] = { 22535E-5, 5384E-5, 42217-5 };
-
-
-// Home magnetic declination
-//from https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml#igrfwmm
-//2019.10411,13.43814,61.24195,23169.0,48157.1,22534.6,5384.4,42217.4
-//One gauss equals 1×10−4 T
-// (nT / 1E9) * 1E4 = gauss
-// (nT/1E5) = gauss
-
-
 
 
 //forward declarations
@@ -101,57 +73,15 @@ void send_one_uorb_msg(Simulator::InternetProtocol via, const struct orb_metadat
     uint8_t* src, size_t len, int handle, uint8_t instance_id);
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval);
 uint16_t hash_from_msg_id(orb_id_t orb_msg_id);
-void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf);
 void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, uint8_t* buf);
 
 
-/// Use unix time to simulate actual time
-unsigned long get_os_clock_usec() {
-  struct timeval tv;
-  gettimeofday(&tv,NULL);
-  unsigned long time_in_micros = 1000000 * tv.tv_sec + tv.tv_usec;
-  return time_in_micros;
-}
+
 
 void update_px4_clock(uint64_t usec) {
   struct timespec ts = {};
   abstime_to_ts(&ts, usec);
   px4_clock_settime(CLOCK_MONOTONIC, &ts);
-}
-
-static hrt_abstime _simulated_clock_usec = 0;
-
-void set_simulated_clock(hrt_abstime usec) {
-  _simulated_clock_usec = usec;
-}
-
-hrt_abstime get_simulated_clock_usec() {
-  return _simulated_clock_usec;
-}
-
-void increment_simulation_clock(uint32_t usec) {
-  _simulated_clock_usec += usec;
-}
-
-
-
-
-const double STD_PRESS = 101325.0;  // static pressure at sea level (Pa)
-const double  STD_TEMP = 288.15;    // standard temperature at sea level (K)
-const double LAPSE_RATE = -0.0065;   // standard temp altitude lapse rate (K/m)
-const double MOL_MASS  = 0.0289644;  // molar mass of Earth's air (kg/mol)
-const double GAS_CONSTANT_R  = 8.31432;    // universal gas constant, R
-const double ACCEL_ONE_G = 9.80665f;	//gravity acceleration (m/s^2)
-
-
-/// Convert altitude (meters) to standard barometric pressure (Pascals)
-/// Note: this formula is likely only useful under 10k feet
-float altitude_to_baro_pressure(float alt)  {
-  double big_alt = (double)alt;
-  double base = STD_TEMP / (STD_TEMP + (LAPSE_RATE * big_alt));
-  double exp = (ACCEL_ONE_G * MOL_MASS) / (GAS_CONSTANT_R * LAPSE_RATE);
-  double val = STD_PRESS * pow(base, exp);
-  return (float)val;
 }
 
 
@@ -160,7 +90,6 @@ uint16_t hash_from_msg_id(orb_id_t orb_msg_id) {
   uint16_t hash_val = crc_calculate((const uint8_t*) orb_msg_id->o_name, namelen);
   return  hash_val;
 }
-
 
 int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval) {
   int handle =  orb_subscribe_multi(orb_msg_id, instance_id);
@@ -179,23 +108,13 @@ int subscribe_to_multi_topic(orb_id_t orb_msg_id, int instance_id, int interval)
   return handle;
 }
 
-//void init_simulated_clock() {
-//  hrt_abstime start_time = get_os_clock_usec();
-//  start_time = (start_time / 1000) * 1000;
-//  set_simulated_clock(start_time);
-//  update_px4_clock(start_time);
-//
-//  PX4_WARN("init_simulated_clock %llu %llu", start_time, hrt_absolute_time());
-//}
 
 void Simulator::init()
 {
   //create a map of all known uorb topics
   size_t count_orb_topics = orb_topics_count();
-//  const struct orb_metadata *all_topics = reinterpret_cast<const orb_metadata *>(orb_get_topics());
 
   const orb_metadata *const*all_topics = orb_get_topics();
-
   PX4_INFO("begin topic mapping %lu %p",count_orb_topics, all_topics);
 
   for (size_t i = 0; i < count_orb_topics; i++) {
@@ -205,17 +124,12 @@ void Simulator::init()
   }
 
   PX4_INFO("done with topic map");
-
   _fd = -1;
   _dest_sock_fd = -1;
 
   // subscribe to topics
   _actuator_outputs_sub = orb_subscribe_multi(ORB_ID(actuator_outputs), 0);
   _vehicle_status_sub =  subscribe_to_multi_topic(ORB_ID(vehicle_status), 0, 0);
-//  _manual_sub =  subscribe_to_multi_topic(ORB_ID(timesync_status), 0, 0);
-
-//  subscribe_to_multi_topic(ORB_ID(vehicle_local_position_setpoint), 0, 0);
-//  subscribe_to_multi_topic(ORB_ID(trajectory_setpoint), 0, 0);
 
   this->_initialized = true;
 }
@@ -239,7 +153,6 @@ void start_thread(pthread_t *thread, void *(*start_routine) (void *)) {
 void Simulator::start_sender() {
   start_thread(&_sender_thread, Simulator::sending_trampoline);
 }
-
 
 
 bool Simulator::init_connection() {
@@ -324,213 +237,6 @@ bool Simulator::init_connection() {
 }
 
 
-float get_noisy_value(float val, float err) {
-  return (val + (err * _normal_distribution(_noise_gen)) );
-}
-
-void publish_local_fake_fast_cadence_sensors() {
-
-  unsigned long common_time =  hrt_absolute_time();
-  if (common_time == 0) {
-    PX4_WARN("bogus hrt");
-    return;
-  }
-
-  sensor_gyro_s gyro_report = {
-    .timestamp = common_time,
-    .device_id = 2293768,
-    .integral_dt = 5 * 1000000,
-    .x_integral = 1.0f,
-    .y_integral = 1.0f,
-    .z_integral = 1.0f,
-
-    .x = get_noisy_value(0.001f, GYRO_ABS_ERR),
-    .y = get_noisy_value(0.001f, GYRO_ABS_ERR),
-    .z = get_noisy_value(0.001f, GYRO_ABS_ERR),
-
-    .x_raw = (int16_t)(gyro_report.x * 1E3),
-    .y_raw = (int16_t)(gyro_report.y * 1E3),
-    .z_raw = (int16_t)(gyro_report.z * 1E3),
-
-    .temperature = get_noisy_value(25.0f, 0.01f),
-  };
-  publish_uorb_msg(ORB_ID(sensor_gyro),0, (const void*) &gyro_report);
-//  PX4_WARN("gyro x: %f", (double) gyro_report.x);
-
-  float xacc = get_noisy_value(0.0, ACCEL_ABS_ERR);
-  float yacc = get_noisy_value(0.0, ACCEL_ABS_ERR);
-  float zacc = get_noisy_value(ACCEL_ONE_G, ACCEL_ABS_ERR);
-
-  sensor_accel_s accel_report = {
-      .timestamp = common_time ,
-      .device_id = 1376264,
-      .x_raw = (int16_t)(xacc / (ACCEL_ONE_G / 1E3)),
-      .y_raw = (int16_t)(yacc / (ACCEL_ONE_G / 1E3)),
-      .z_raw = (int16_t)(zacc / (ACCEL_ONE_G / 1E3)),
-      .x = xacc,
-      .y = yacc,
-      .z = zacc,
-
-      .temperature = get_noisy_value(25.0f, 0.01f),
-  };
-  publish_uorb_msg(ORB_ID(sensor_accel),0, (const void*) &accel_report);
-
-
-  float xmag = get_noisy_value(HOME_MAG[0], MAG_ABS_ERR);
-  float ymag = get_noisy_value(HOME_MAG[1], MAG_ABS_ERR);
-  float zmag = get_noisy_value(HOME_MAG[2], MAG_ABS_ERR);
-
-  mag_report mag_report = {
-      .timestamp = common_time ,
-      .device_id = 196616,
-      .x_raw = (int16_t)(xmag * 1000.0f),
-      .y_raw = (int16_t)(ymag * 1000.0f),
-      .z_raw = (int16_t)(zmag * 1000.0f),
-      .x = xmag,
-      .y = ymag,
-      .z = zmag,
-
-      .temperature = get_noisy_value(25.0f, 0.01f),
-  };
-  publish_uorb_msg(ORB_ID(sensor_mag),0, (const void*) &mag_report);
-
-
-  // In order for sensor fusion to align,
-  // baro pressure needs to match the altitude given by GPS
-  float shared_alt = get_noisy_value(HOME_ALT, 0.1);
-  float abs_pressure =  altitude_to_baro_pressure(shared_alt);
-
-  sensor_baro_s baro_report = {
-      .timestamp = common_time,
-      .device_id = 478459,
-      .pressure = abs_pressure,
-      .temperature = 25.0f,
-  };
-  publish_uorb_msg(ORB_ID(sensor_baro),0, (const void*) &baro_report);
-
-}
-
-void send_fake_gps_msgs() {
-  int32_t common_alt = (int32_t)(1E3* get_noisy_value(HOME_ALT, 0.1));
-  unsigned long common_time =  hrt_absolute_time();
-
-  vehicle_gps_position_s gps_report = {
-      .timestamp = common_time,
-      .time_utc_usec = get_simulated_clock_usec(),
-      .lat = (int32_t)(1E7* get_noisy_value(HOME_LAT, GPS_ABS_ERR)),
-      .lon = (int32_t)(1E7* get_noisy_value(HOME_LON, GPS_ABS_ERR)),
-      .alt = common_alt,
-      .alt_ellipsoid = common_alt,
-      .eph = 1.0f,
-      .epv = 2.0f,
-      .vel_m_s = get_noisy_value(0.0, 0.025f),
-      .vel_n_m_s = get_noisy_value(0.0, 0.025f),
-      .vel_e_m_s = get_noisy_value(0.0, 0.025f),
-      .vel_d_m_s = get_noisy_value(0.0, 0.025f),
-      .cog_rad = get_noisy_value(0.0f, 0.001f),
-      .vel_ned_valid = true,
-      .fix_type = 3,
-      .satellites_used = 10,
-  };
-  publish_uorb_msg(ORB_ID(vehicle_gps_position),0, (uint8_t*) &gps_report);
-
-}
-
-void publish_slow_cadence_fake_sensors() {
-
-  unsigned long common_time = hrt_absolute_time();
-
-//  send_fake_gps_msgs(via);
-
-//  system_power_s system_power = {
-//    .timestamp =  common_time,
-//    .voltage5v_v = 5.0,
-//    .voltage3v3_v = 3.3,
-//    .v3v3_valid = 1,
-//    .usb_connected = 0,
-//    .brick_valid = 1,
-//    .usb_valid = 0,
-//    .servo_valid = 1,
-//    .periph_5v_oc = 0,
-//    .hipower_5v_oc = 0
-//  };
-//  publish_uorb_msg(ORB_ID(sensor_baro),0, (const void*) &baro_report);
-
-  battery_status_s batt_report =  {
-    .timestamp =  common_time,
-    .voltage_v = 16.0,
-    .cell_count = 4,
-    .connected = true,
-    .system_source = true,
-//    .warning = battery_status_s::BATTERY_WARNING_CRITICAL,
-  };
-  publish_uorb_msg(ORB_ID(battery_status),0, (const void*) &batt_report);
-
-}
-
-
-#define SIMULATOR_TIME_RATIO 1
-
-void do_local_simulation() {
-  static hrt_abstime _last_realtime_clock = 0;
-  static hrt_abstime _last_fast_cadence_send = 0;
-  static hrt_abstime _last_slow_cadence_send = 0;
-
-  hrt_abstime real_time = get_os_clock_usec();
-  hrt_abstime delta_time = (real_time - _last_realtime_clock);
-//  PX4_WARN("delta_time: %llu", delta_time);
-  _last_realtime_clock = real_time;
-
-  for (int i = 0; i < SIMULATOR_TIME_RATIO; i++) {
-    increment_simulation_clock(delta_time);
-
-    update_px4_clock(get_simulated_clock_usec());
-    hrt_abstime local_elapsed_usec = hrt_absolute_time();
-
-    if ((local_elapsed_usec - _last_fast_cadence_send) > 125) {
-      publish_local_fake_fast_cadence_sensors();
-      _last_fast_cadence_send = local_elapsed_usec;
-
-      if ((local_elapsed_usec - _last_slow_cadence_send) > 1000000) {
-        publish_slow_cadence_fake_sensors();
-        _last_slow_cadence_send = local_elapsed_usec;
-      }
-    }
-  }
-
-  //PX4_INFO("do_local_simulation %llu", real_time);
-}
-
-
-
-void publish_uorb_msg(orb_id_t orb_msg_id, uint8_t instance_id, const void* buf) {
-  uint16_t hashval = hash_from_msg_id(orb_msg_id);
-  std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
-  orb_advert_t advert = _uorb_hash_to_advert[key];
-
-  int up_instance_id = instance_id;
-
-  int ret = orb_publish_auto(
-      orb_msg_id,
-      &advert,
-      buf,
-      &up_instance_id,
-      ORB_PRIO_HIGH);
-
-  if (_uorb_hash_to_advert[key] != advert) {
-    _uorb_hash_to_advert[key] = advert;
-    //PX4_INFO("%s advert: %p", orb_msg_id->o_name, _uorb_hash_to_advert[key]);
-  }
-
-  if (OK != ret) {
-    PX4_ERR("publish err: %d", ret);
-  }
-  else {
-    PX4_DEBUG("pub: %s [%d]", orb_msg_id->o_name, instance_id);
-  }
-}
-
-
 void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, uint8_t* buf) {
   uint16_t hashval = hash_from_msg_id(orb_msg_id);
   std::tuple<uint16_t,uint8_t> key = std::make_tuple(hashval, instance_id);
@@ -557,8 +263,6 @@ void publish_uorb_msg_from_bytes(orb_id_t orb_msg_id, uint8_t instance_id, uint8
     PX4_DEBUG("pub: %s [%d]", orb_msg_id->o_name, instance_id);
   }
 }
-
-
 
 
 void Simulator::recv_loop() {
@@ -690,7 +394,6 @@ void *Simulator::sending_trampoline(void * /*unused*/)
   _instance->send_loop();
   return nullptr;
 }
-
 
 
 void Simulator::send_loop()
