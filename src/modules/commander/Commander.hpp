@@ -39,7 +39,6 @@
 
 #include <lib/controllib/blocks.hpp>
 #include <lib/mathlib/mathlib.h>
-#include <lib/rustlib/rust_lib.h>
 #include <px4_module.h>
 #include <px4_module_params.h>
 #include <systemlib/hysteresis/hysteresis.h>
@@ -200,7 +199,6 @@ private:
 
 	orb_advert_t					_status_pub{nullptr};
 
-	RustLib* _rust_lib{nullptr};
 };
 
 #endif /* COMMANDER_HPP_ */

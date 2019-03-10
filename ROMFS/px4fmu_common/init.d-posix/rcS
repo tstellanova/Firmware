@@ -193,6 +193,7 @@ tone_alarm start
 sensors start
 commander start
 navigator start
+stargate start
 
 if param compare WEST_EN 1
 then

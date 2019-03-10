@@ -559,7 +559,6 @@ Commander::Commander() :
 	_auto_disarm_landed.set_hysteresis_time_from(false, 10_s);
 	_auto_disarm_killed.set_hysteresis_time_from(false, 5_s);
 	_battery_sub = orb_subscribe(ORB_ID(battery_status));
-	_rust_lib = new RustLib();
 }
 
 Commander::~Commander()
@@ -4144,8 +4143,6 @@ void Commander::battery_status_check()
 			_battery_current = battery.current_filtered_a;
 		}
 	}
-
-  this->_rust_lib->tricks();
 
 }
 

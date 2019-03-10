@@ -44,6 +44,7 @@ px4_add_board(
 		replay
 		sensors
 		simulator
+		stargate
 		vmount
 		vtol_att_control
 		wind_estimator

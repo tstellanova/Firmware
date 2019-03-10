@@ -1,6 +1,6 @@
 ############################################################################
 #
-#   Copyright (c) 2015 PX4 Development Team. All rights reserved.
+#   Copyright (c) 2019 Todd Stellanova. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -12,7 +12,7 @@
 #    notice, this list of conditions and the following disclaimer in
 #    the documentation and/or other materials provided with the
 #    distribution.
-# 3. Neither the name PX4 nor the names of its contributors may be
+# 3. Neither the name of the copyright holder nor the names of its contributors may be
 #    used to endorse or promote products derived from this software
 #    without specific prior written permission.
 #
@@ -31,38 +31,14 @@
 #
 ############################################################################
 
-add_subdirectory(failure_detector)
-
 px4_add_module(
-	MODULE modules__commander
-	MAIN commander
-	STACK_MAIN 4096
-	STACK_MAX 2450
-	COMPILE_FLAGS
+	MODULE modules_stargate
+	MAIN stargate
+	STACK_MAIN 1024
 	SRCS
-		accelerometer_calibration.cpp
-		airspeed_calibration.cpp
-		arm_auth.cpp
-		baro_calibration.cpp
-		calibration_routines.cpp
-		Commander.cpp
-		commander_helper.cpp
-		esc_calibration.cpp
-		gyro_calibration.cpp
-		health_flag_helper.cpp
-		mag_calibration.cpp
-		PreflightCheck.cpp
-		rc_calibration.cpp
-		rc_check.cpp
-		state_machine_helper.cpp
+        Stargate.cpp
 	DEPENDS
-		circuit_breaker
-		df_driver_framework
-		failure_detector
-		git_ecl
-		ecl_geo
-	)
+		modules__uORB
+		rustlib
+)
 
-if(PX4_TESTING)
-	add_subdirectory(commander_tests)
-endif()
