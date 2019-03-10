@@ -182,8 +182,10 @@ void StargateModule::run()
 	fds[0].events = POLLIN;
 	unsigned fd_count = (sizeof(fds) / sizeof(fds[0]));
 
+  this->_rust_lib->tricks();
 
-	while (!should_exit()) {
+
+  while (!should_exit()) {
 		// wait for up to 1000ms for data
 		int pret = px4_poll(fds, fd_count, 1000);
 
