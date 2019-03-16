@@ -11,19 +11,21 @@
 #include <uORB/topics/sensor_combined.h>
 
 extern "C" {
-  uint32_t remote_add(uint32_t  lhs, uint32_t rhs);
-  uint32_t happy_testo(uint32_t  a, uint32_t b);
   uint64_t get_sub_metadata() ;
-
+  uint32_t ephemeral_happy();
+  void* new_happy_instance() ;
+  uint32_t check_inst_subs(void* happy);
 }
 
 RustLib::RustLib()
 {
-
+  _boxed_rust_struct = new_happy_instance();
 }
 
+
+
 void RustLib::tricks() {
-  uint32_t result = happy_testo(100, 23);
+  uint32_t result = check_inst_subs(this->_boxed_rust_struct);
   PX4_WARN("tricks: %u", result);
 
 //  void* result = (void*)get_sub_metadata();

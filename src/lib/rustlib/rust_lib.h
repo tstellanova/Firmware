@@ -13,6 +13,9 @@ public:
 
   void tricks();
 
+private:
+  void* _boxed_rust_struct;
+
 };
 
 
