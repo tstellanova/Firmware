@@ -520,6 +520,20 @@ void Simulator::poll_topics()
     }
   }
 
+  {
+    //    Simulator::InternetProtocol via,
+    //    orb_id_t orb_msg_id,
+    //    uint8_t* src,
+    //    size_t len,
+    //    int handle,
+    //    uint8_t instance_id) {
+
+    //we assume _actuator_outputs_sub is always updated
+    send_one_uorb_msg(_ip, ORB_ID(actuator_outputs),
+        nullptr, 0, _actuator_outputs_sub, 0);
+
+  }
+
 }
 
 
