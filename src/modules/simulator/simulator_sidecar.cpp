@@ -283,8 +283,6 @@ void Simulator::recv_loop() {
 
     if (pret == 0) {
       // Timed out.
-      //TODO temporary: force publish some attitude values
-//      do_local_simulation();
       continue;
     }
 
