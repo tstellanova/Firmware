@@ -14,6 +14,7 @@
 #include <drivers/drv_pwm_output.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/un.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -191,6 +192,47 @@ bool Simulator::init_connection() {
 
     PX4_INFO("Client connected on UDP port %u.", _port);
   }
+  else if (_ip == InternetProtocol::UDS) {
+//    const char* uds_path = "/var/run/px4_sitl_sidecar.sock";
+    const char* uds_path = "/Users/todd/tmpvar/px4_sitl_sidecar.sock";
+    struct sockaddr_un addr = {};
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, uds_path);//TODO guard against too long path?
+    PX4_INFO("Setting up UDS on '%s'", addr.sun_path);
+
+    while (true) {
+      //ensure that we clear (unlink) any existing socket (file)
+      unlink(addr.sun_path);
+
+      if ((_fd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
+        PX4_ERR("Creating UDS socket failed: %s", strerror(errno));
+        return  false;
+      }
+
+      if (bind(_fd, (struct sockaddr *) &addr, SUN_LEN(&addr)) == -1) {
+        PX4_ERR("ERROR on UDS bind");
+        return false;
+      }
+
+      //start listening for clients
+      if (listen(_fd, 5) == -1) {
+        PX4_ERR("ERROR on UDS listen");
+        return false;
+      }
+
+      int newsockfd = accept(_fd, NULL, NULL);
+      if (newsockfd < 0) {
+        PX4_ERR("accept err %d", newsockfd);
+        close(_fd);
+        system_sleep(1);
+      } else  {
+        _dest_sock_fd = newsockfd;
+        break;
+      }
+    }
+
+    PX4_INFO("Client connected on UDS path %s", uds_path);
+  }
   else {
     PX4_INFO("Waiting for client to connect on TCP port %u", _port);
 
@@ -206,8 +248,8 @@ bool Simulator::init_connection() {
         PX4_ERR("setsockopt failed: %s", strerror(errno));
       }
 
-      if (bind(_fd, (struct sockaddr *) &_myaddr, sizeof(_myaddr)) < 0) {
-        PX4_ERR("ERROR on binding");
+      if (bind(_fd, (struct sockaddr *) &_myaddr, sizeof(_myaddr)) == -1) {
+        PX4_ERR("ERROR on bind");
         return false;
       }
 

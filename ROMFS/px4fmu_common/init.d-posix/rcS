@@ -186,7 +186,9 @@ sh "$autostart_file"
 
 dataman start
 replay tryapplyparams
-simulator start -s -c $simulator_tcp_port
+#simulator start -s -c $simulator_tcp_port
+# start in UDS mode:
+simulator start -s -d junko
 tone_alarm start
 #gyrosim start
 #accelsim start

@@ -149,14 +149,16 @@ int Simulator::start(int argc, char *argv[])
 	if (_instance) {
 		drv_led_start();
 
-		if (argc == 5 && strcmp(argv[3], "-u") == 0) {
-			_instance->set_ip(InternetProtocol::UDP);
-			_instance->set_port(atoi(argv[4]));
-		}
-
-		if (argc == 5 && strcmp(argv[3], "-c") == 0) {
-			_instance->set_ip(InternetProtocol::TCP);
-			_instance->set_port(atoi(argv[4]));
+		if (argc == 5) {
+			if (strcmp(argv[3], "-u") == 0) {
+				_instance->set_ip(InternetProtocol::UDP);
+				_instance->set_port(atoi(argv[4]));
+			} else if (strcmp(argv[3], "-c") == 0) {
+				_instance->set_ip(InternetProtocol::TCP);
+				_instance->set_port(atoi(argv[4]));
+			} else if (strcmp(argv[3], "-d") == 0) {
+				_instance->set_ip(InternetProtocol::UDS);
+			}
 		}
 
 		if (argv[2][1] == 's') {

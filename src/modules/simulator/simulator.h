@@ -214,7 +214,8 @@ public:
 
 	enum class InternetProtocol {
 		TCP,
-		UDP
+		UDP,
+		UDS
 	};
 
 	static int start(int argc, char *argv[]);
