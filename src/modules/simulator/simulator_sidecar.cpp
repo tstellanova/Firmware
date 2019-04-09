@@ -194,10 +194,18 @@ bool Simulator::init_connection() {
   }
   else if (_ip == InternetProtocol::UDS) {
 //    const char* uds_path = "/var/run/px4_sitl_sidecar.sock";
-    const char* uds_path = "/Users/todd/tmpvar/px4_sitl_sidecar.sock";
+    const char *xdg_key = "$XDG_RUNTIME_DIR";
+    const char *path = getenv(xdg_key);
+    if (0 == path) {
+      path = "/tmp";
+    }
+    PX4_INFO("xdg path: %s", path);
+
+    const char* uds_path_suffix = "/px4_sitl_sidecar.sock";
     struct sockaddr_un addr = {};
     addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path, uds_path);//TODO guard against too long path?
+    strcpy(addr.sun_path, path);//TODO guard against too long path?
+    strcat(addr.sun_path, uds_path_suffix);
     PX4_INFO("Setting up UDS on '%s'", addr.sun_path);
 
     while (true) {
@@ -231,7 +239,7 @@ bool Simulator::init_connection() {
       }
     }
 
-    PX4_INFO("Client connected on UDS path %s", uds_path);
+    PX4_INFO("Client connected on UDS path %s", addr.sun_path);
   }
   else {
     PX4_INFO("Waiting for client to connect on TCP port %u", _port);
