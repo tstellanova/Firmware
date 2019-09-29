@@ -28,8 +28,7 @@ px4_add_board(
 		events
 		#fw_att_control
 		#fw_pos_control_l1
-		#gnd_att_control
-		#gnd_pos_control
+		#rover_pos_control
 		land_detector
 		landing_target_estimator
 		load_mon
@@ -40,8 +39,9 @@ px4_add_board(
 		mc_pos_control
 		navigator
 		sensors
+		sih
 		#vtol_att_control
-		wind_estimator
+		airspeed_selector
 
 	SYSTEMCMDS
 		#config

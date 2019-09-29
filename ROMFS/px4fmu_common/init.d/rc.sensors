@@ -15,14 +15,6 @@ then
 		fmu i2c 2 100000
 	fi
 
-	# External SPI
-	ms5611 -S start
-
-	# Internal SPI (auto detect ms5611 or ms5607)
-	ms5611 -T 0 -s start
-
-	# Blacksheep telemetry
-	bst start
 
 	adc start
 fi
@@ -72,7 +64,13 @@ fi
 # Lidar-Lite on I2C
 if param compare SENS_EN_LL40LS 2
 then
-	ll40ls start i2c
+	ll40ls start i2c -a
+fi
+
+# mappydot lidar sensor
+if param compare SENS_EN_MPDT 1
+then
+	mappydot start -a
 fi
 
 # mb12xx sonar sensor
@@ -105,11 +103,11 @@ then
 	teraranger start -a
 fi
 
-# ICM20948 as external magnetometer on I2C (e.g. Here GPS)
-icm20948 -X -M -R 6 start
-
-# Check for flow sensor, launched as a background task to scan
-px4flow start &
+# Possible pmw3901 optical flow sensor
+if param greater SENS_EN_PMW3901 0
+then
+	pmw3901 start
+fi
 
 ###############################################################################
 #                            End Optional drivers                             #
