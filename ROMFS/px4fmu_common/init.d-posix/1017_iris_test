@@ -19,4 +19,11 @@ then
 	param set LPE_FAKE_ORIGIN 1
 
 	param set MPC_ALT_MODE 2
+
+    # enable fusion of landing target velocity
+    param set LTEST_MODE 1
+    param set PLD_HACC_RAD 0.1
 fi
+
+# Start up Landing Target Estimator module
+landing_target_estimator start
